@@ -605,3 +605,7 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
   .row { content-visibility: visible; }
   html, body { overscroll-behavior-y: none; }
 }
+
+/* Kruisje van het detailscherm weer rechtsboven (de glas-knopstijl zette het per ongeluk in de tekststroom) */
+.round.sheet-close { position: absolute; top: 14px; right: 14px; left: auto; z-index: 5; }
+.reload-btn { width: 100%; justify-content: center; }

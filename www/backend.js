@@ -716,6 +716,16 @@ async function route(url, init) {
 
   if (!cfg) throw new HttpError(401, 'Niet ingelogd');
 
+  // "Alles opnieuw laden": alles vergeten en vers ophalen bij de aanbieder
+  if (p === '/api/refresh' && method === 'POST') {
+    cache.clear(); stable.clear(); searchCache.clear();
+    for (const t of ['vod', 'series']) { delete fullReady[t]; delete fullLoading[t]; }
+    await idb.clear();
+    await route('/api/home?type=live', {});
+    warmUp();
+    return { ok: true };
+  }
+
   if (p === '/api/home' && q.type === 'live') return liveHome();
   if (p === '/api/country') return liveCountry(q.code);
   if (p === '/api/categories') return rowCategories(q.type);

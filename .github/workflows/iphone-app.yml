@@ -28,15 +28,17 @@ jobs:
       - name: Repo-naam in de app (voor de Netflix Top 10 Nederland)
         run: echo "window.TV_REPO = '${{ github.repository }}';" > www/build-info.js
 
-      - name: iPhone-project maken
+      - name: iPhone-project maken (met de VLC-speler)
         run: |
           npx cap add ios
+          sed -i '' "s/# Add your Pods here/pod 'MobileVLCKit', '~> 3.6.0'/" ios/App/Podfile
+          grep -n "MobileVLCKit" ios/App/Podfile
           npx cap sync ios
 
-      - name: Eigen hoofdscherm (thuisbalk verbergen, geen per-ongeluk-veeg onderin)
+      - name: Eigen hoofdscherm en VLC-speler (thuisbalk verbergen, .mkv afspelen)
         run: |
-          cp resources/MainViewController.swift ios/App/App/MainViewController.swift
-          ruby -e "require 'xcodeproj'; p = Xcodeproj::Project.open('ios/App/App.xcodeproj'); t = p.targets.find { |x| x.name == 'App' }; g = p.main_group.find_subpath('App', false); f = g.new_reference('MainViewController.swift'); t.add_file_references([f]); p.save"
+          cp resources/MainViewController.swift resources/VLCPlayer.swift ios/App/App/
+          ruby -e "require 'xcodeproj'; p = Xcodeproj::Project.open('ios/App/App.xcodeproj'); t = p.targets.find { |x| x.name == 'App' }; g = p.main_group.find_subpath('App', false); refs = ['MainViewController.swift', 'VLCPlayer.swift'].map { |n| g.new_reference(n) }; t.add_file_references(refs); p.save"
           sed -i '' 's/customClass="CAPBridgeViewController" customModule="Capacitor"/customClass="MainViewController" customModule="App" customModuleProvider="target"/' ios/App/App/Base.lproj/Main.storyboard
           grep -o 'customClass="[A-Za-z]*"' ios/App/App/Base.lproj/Main.storyboard
 

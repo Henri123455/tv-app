@@ -1391,6 +1391,12 @@ $('#accountBtn').onclick = async () => {
     </div>
 
     <div class="group">
+      <h3>Lijsten verversen</h3>
+      <p class="muted small">Haalt alle zenders, films, series en programma's opnieuw op bij je aanbieder (bijvoorbeeld als er iets nieuws is of als iets niet klopt).</p>
+      <button class="btn glass reload-btn" id="reloadAll">Alles opnieuw laden</button>
+    </div>
+
+    <div class="group">
       <h3>Abonnement</h3>
       <div class="kv"><span>Status</span><span>${esc(u.status || '—')}</span><span>Geldig tot</span><span>${esc(exp)}</span><span>Schermen tegelijk</span><span>${esc(u.max_connections || '—')}</span><span>Gebruiker</span><span>${esc(S.session?.username)}</span></div>
     </div>
@@ -1399,7 +1405,19 @@ $('#accountBtn').onclick = async () => {
     store.set('theme', b.dataset.themePick); applyTheme();
     $$('[data-theme-pick]').forEach(x => x.classList.toggle('active', x === b));
   });
-  $('#switchProfile').onclick =() => { closeTop(); setTimeout(showWho, 60); };
+  $('#reloadAll').onclick = async e => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Bezig met laden…';
+    try { await api('/api/refresh', { method: 'POST' }); } catch {}
+    // Ook alles wat dit apparaat onthouden had weggooien, en de pagina's opnieuw opbouwen
+    for (const k of Object.keys(localStorage)) if (k.startsWith('c:')) localStorage.removeItem(k);
+    S.cats = {}; S.lists.clear(); infoCache.clear();
+    for (const el of Object.values(S.pages)) el.remove();
+    S.pages = {};
+    closeTop();
+    setTab(S.tab);
+    toast('Alles is opnieuw geladen');
+  };
+  $('#switchProfile').onclick = () => { closeTop(); setTimeout(showWho, 60); };
   $('#logoutBtn').onclick = async () => { if (!confirm('Uitloggen? Je moet daarna opnieuw je server, gebruikersnaam en wachtwoord invullen.')) return; await fetch('/api/logout', { method: 'POST' }); location.reload(); };
   if (lan) {
     try { await loadQR(); const qr = qrcode(0, 'M'); qr.addData(lan); qr.make(); $('#qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); } catch {}
