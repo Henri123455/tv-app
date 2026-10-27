@@ -1,0 +1,26 @@
+{
+  "name": "TV",
+  "identifier": "io.github.henri123455.tv",
+  "subtitle": "Live tv, films en series in Apple TV-stijl",
+  "iconURL": "https://raw.githubusercontent.com/Henri123455/tv-app/main/resources/icon-1024.png",
+  "apps": [
+    {
+      "name": "TV",
+      "bundleIdentifier": "nl.tvapp.speler",
+      "developerName": "Henri123455",
+      "subtitle": "Live tv, films en series",
+      "localizedDescription": "IPTV-speler in Apple TV-stijl: Nederland bovenaan, één beste versie per zender, terugkijken, Top 10 en Apple's eigen speler.",
+      "iconURL": "https://raw.githubusercontent.com/Henri123455/tv-app/main/resources/icon-1024.png",
+      "tintColor": "5E5CE6",
+      "versions": [
+        {
+          "version": "1.3",
+          "date": "2026-10-27T11:22:25.002Z",
+          "size": 1721070,
+          "downloadURL": "https://github.com/Henri123455/tv-app/releases/download/v1.3/TV.ipa",
+          "minOSVersion": "15.0"
+        }
+      ]
+    }
+  ]
+}
