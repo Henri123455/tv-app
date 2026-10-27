@@ -210,7 +210,13 @@ function bestVersion(versions, nlSet) {
 function dedupe(items, nlSet) {
   const g = new Map();
   for (const x of items) { const k = titleKey(x.n); if (!g.has(k)) g.set(k, []); g.get(k).push(x); }
-  return [...g.values()].map(v => bestVersion(v, nlSet));
+  return [...g.values()].map(v => {
+    const best = bestVersion(v, nlSet);
+    if (v.length < 2) return best;
+    // De andere versies onthouden: werkt de beste even niet (bijv. een kapotte HQ-server), dan neemt de app de volgende
+    const rest = v.filter(x => x !== best).sort((a, b) => (nlSet.has(b.c) - nlSet.has(a.c)) || ((b.lg === 'NL') - (a.lg === 'NL')));
+    return { ...best, alt: rest.slice(0, 4).map(x => ({ id: x.id, e: x.e })) };
+  });
 }
 // Alle Nederlandse titels, één versie elk, populairste eerst
 async function nlPool(type) {
@@ -763,6 +769,18 @@ async function route(url, init) {
       const k = fold(x.n); if (seen.has(k)) continue; seen.add(k); out.push(x.n); if (out.length >= 8) break;
     }
     return out;
+  }
+  // Andere versies van een film/serie (Nederlandse én internationale lijsten), voor als de gekozen versie kapot is
+  if (p === '/api/alternatives') {
+    const type = q.type === 'series' ? 'series' : 'vod';
+    const key = titleKey(q.name || '');
+    const cats = await categories(type);
+    const parts = await Promise.all(cats.filter(c => c.code === 'NL' || c.code === 'ALL').map(c => fetchList(type, c.id).catch(() => [])));
+    const nlSet = await nlCatSet(type);
+    return [].concat(...parts)
+      .filter(x => titleKey(x.n) === key && String(x.id) !== String(q.id))
+      .sort((a, b) => (nlSet.has(b.c) - nlSet.has(a.c)) || ((a.hq ? 1 : 0) - (b.hq ? 1 : 0)))
+      .slice(0, 6).map(x => ({ id: x.id, e: x.e, hq: x.hq }));
   }
   if (p === '/api/view' && method === 'POST') { const b = body(); if (/^(live|vod|series):\d+$/.test(b.k)) addView(b.k, b.item); return { ok: true }; }
   if (p === '/api/codec') return { codec: '' };

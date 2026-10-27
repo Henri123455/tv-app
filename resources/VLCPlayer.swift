@@ -168,6 +168,11 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         spinner.startAnimating()
         player.play()
         scheduleHide()
+        // Na 20 seconden nog steeds geen beeld? Dan is deze bron kapot: sluiten zodat de app de volgende probeert
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            guard let self = self, !self.everPlayed, !self.finished else { return }
+            self.finish(ended: false)
+        }
     }
 
     private func symbolButton(_ name: String, size: CGFloat, action: Selector) -> UIButton {
@@ -232,10 +237,8 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         case .playing: spinner.stopAnimating(); everPlayed = true
         case .ended: finish(ended: true)
         case .error:
-            spinner.stopAnimating()
-            let a = UIAlertController(title: "Afspelen lukt niet", message: "Deze stream reageert niet.", preferredStyle: .alert)
-            a.addAction(UIAlertAction(title: "Sluiten", style: .default) { [weak self] _ in self?.finish(ended: false) })
-            present(a, animated: true)
+            // Geen melding: de app probeert dan meteen vanzelf een andere versie of bron
+            finish(ended: false)
         default: break
         }
     }

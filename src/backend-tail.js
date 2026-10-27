@@ -173,6 +173,18 @@ async function route(url, init) {
     }
     return out;
   }
+  // Andere versies van een film/serie (Nederlandse én internationale lijsten), voor als de gekozen versie kapot is
+  if (p === '/api/alternatives') {
+    const type = q.type === 'series' ? 'series' : 'vod';
+    const key = titleKey(q.name || '');
+    const cats = await categories(type);
+    const parts = await Promise.all(cats.filter(c => c.code === 'NL' || c.code === 'ALL').map(c => fetchList(type, c.id).catch(() => [])));
+    const nlSet = await nlCatSet(type);
+    return [].concat(...parts)
+      .filter(x => titleKey(x.n) === key && String(x.id) !== String(q.id))
+      .sort((a, b) => (nlSet.has(b.c) - nlSet.has(a.c)) || ((a.hq ? 1 : 0) - (b.hq ? 1 : 0)))
+      .slice(0, 6).map(x => ({ id: x.id, e: x.e, hq: x.hq }));
+  }
   if (p === '/api/view' && method === 'POST') { const b = body(); if (/^(live|vod|series):\d+$/.test(b.k)) addView(b.k, b.item); return { ok: true }; }
   if (p === '/api/codec') return { codec: '' };
   if (p === '/api/top') return top10(['live', 'vod', 'series'].includes(q.type) ? q.type : 'live');

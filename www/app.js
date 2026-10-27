@@ -102,7 +102,7 @@ function avatarHTML(p, size = '') {
   return `<span class="avatar ${size}" style="--c:${esc(p.color)}">${esc((p.name || '?').trim()[0]?.toUpperCase() || '?')}</span>`;
 }
 async function showWho(manage = false) {
-  hideAll();
+  hideAll(); hideSplash();
   $('#who').hidden = false;
   S.profiles = await api('/api/profiles').catch(() => []);
   $('#who h1').textContent = manage ? 'Profielen beheren' : 'Wie kijkt er?';
@@ -218,7 +218,7 @@ const imgIO = new IntersectionObserver(es => es.forEach(e => {
   if (!e.isIntersecting) return;
   const im = e.target; imgIO.unobserve(im);
   if (im.dataset.src) { im.src = im.dataset.src; im.removeAttribute('data-src'); }
-}), { rootMargin: '700px 900px' });
+}), { rootMargin: matchMedia('(pointer: coarse)').matches ? '350px 450px' : '700px 900px' }); // telefoon: minder tegelijk = geen haperingen
 new MutationObserver(ms => {
   for (const m of ms) for (const n of m.addedNodes) {
     if (n.nodeType !== 1) continue;
@@ -454,7 +454,8 @@ function setTab(tab) {
   if (!S.pages[tab] || tab === 'mine') {
     S.pages[tab]?.remove();
     const el = document.createElement('div'); el.className = 'page'; main.appendChild(el); S.pages[tab] = el;
-    ({ live: renderLive, vod: renderBrowse, series: renderBrowse, archive: renderArchive, mine: renderMine, search: renderSearch })[tab](tab);
+    Promise.resolve(({ live: renderLive, vod: renderBrowse, series: renderBrowse, archive: renderArchive, mine: renderMine, search: renderSearch })[tab](tab))
+      .finally(() => document.dispatchEvent(new Event('tv-ready')));
   }
   window.scrollTo(0, S.pages[tab]._scroll || 0);
   store.set('tab', tab);
@@ -1436,8 +1437,13 @@ lightQuery.addEventListener?.('change', applyTheme);
 applyTheme();
 
 // ================= Inloggen =================
-function hideAll() { $('#splash').hidden = true; $('#login').hidden = true; $('#who').hidden = true; $('#nav').hidden = true; main.hidden = true; }
-function showLogin() { hideAll(); $('#login').hidden = false; }
+function hideAll() { $('#login').hidden = true; $('#who').hidden = true; $('#nav').hidden = true; main.hidden = true; }
+// Opstartscherm zacht laten verdwijnen
+function hideSplash() {
+  const s = $('#splash'); if (!s || s.hidden) return;
+  s.classList.add('out'); setTimeout(() => s.hidden = true, 450);
+}
+function showLogin() { hideAll(); hideSplash(); $('#login').hidden = false; }
 $('#loginForm').onsubmit = async e => {
   e.preventDefault();
   const f = new FormData(e.target);
@@ -1456,6 +1462,12 @@ function startApp() {
   hideAll();
   $('#nav').hidden = false; main.hidden = false;
   $('#accountBtn').innerHTML = avatarHTML(S.profile, 'sm');
+  // Opstartscherm blijft staan tot de eerste pagina klaar is (minstens 1 en hoogstens 4 seconden),
+  // zodat je meteen een volle, rustige pagina ziet in plaats van alles dat nog binnenkomt
+  const t0 = Date.now();
+  const ready = () => setTimeout(hideSplash, Math.max(0, 1000 - (Date.now() - t0)) + 250);
+  document.addEventListener('tv-ready', ready, { once: true });
+  setTimeout(hideSplash, 4000);
   const t = store.get('tab', 'live');
   setTab(['live', 'vod', 'series', 'archive', 'mine', 'search'].includes(t) ? t : 'live');
   // De iPhone speelt alles zelf af; alleen andere apparaten hebben de speler-bibliotheken nodig
