@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="sq"><rect width="1024" height="1024" rx="230"/></clipPath>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".3" stop-color="#fff" stop-opacity=".04"/><stop offset="1" stop-color="#fff" stop-opacity=".08"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#sq)">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#30323b"/>
+      <stop offset=".55" stop-color="#121318"/>
+      <stop offset="1" stop-color="#050506"/>
+    </linearGradient>
+    <radialGradient id="glow" cx=".5" cy=".52" r=".46">
+      <stop offset="0" stop-color="#6e6bff" stop-opacity=".55"/>
+      <stop offset=".6" stop-color="#3a7bff" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#3a7bff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#64d2ff"/>
+      <stop offset=".45" stop-color="#5e5ce6"/>
+      <stop offset="1" stop-color="#bf5af2"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".5"/>
+      <stop offset=".45" stop-color="#fff" stop-opacity=".06"/>
+      <stop offset=".46" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".7"/>
+      <stop offset="1" stop-color="#fff" stop-opacity=".1"/>
+    </linearGradient>
+    <linearGradient id="stand" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#d9d9e0"/>
+      <stop offset=".5" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d9d9e0"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="512" cy="500" r="470" fill="url(#glow)"/>
+  <!-- scherm -->
+  <rect x="196" y="262" width="632" height="410" rx="72" fill="#000" opacity=".45" filter="url(#soft)" transform="translate(0 26)"/>
+  <rect x="196" y="262" width="632" height="410" rx="72" fill="url(#screen)"/>
+  <rect x="196" y="262" width="632" height="410" rx="72" fill="url(#gloss)"/>
+  <rect x="197.5" y="263.5" width="629" height="407" rx="70.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
+  <!-- afspeelknop -->
+  <path d="M462 386 Q462 362 484 374 L604 446 Q624 458 604 470 L484 542 Q462 554 462 530 Z" fill="#fff"/>
+  <!-- voet -->
+  <rect x="392" y="736" width="240" height="30" rx="15" fill="url(#stand)"/>
+</g>
+  <rect x="3" y="3" width="1018" height="1018" rx="227" fill="none" stroke="url(#edge)" stroke-width="6"/>
+</svg>

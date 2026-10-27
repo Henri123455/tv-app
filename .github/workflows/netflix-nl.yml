@@ -1,0 +1,27 @@
+# Elke ochtend de officiële Netflix Top 10 van Nederland ophalen en klaarzetten voor de app
+# (data/netflix-nl.json). Zo weet de app wat er in Nederland het meest bekeken wordt.
+name: Netflix Top 10 Nederland
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node scripts/netflix-nl.js
+      - name: Opslaan als er iets veranderd is
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add data/netflix-nl.json
+          git diff --cached --quiet || (git commit -m "Netflix Top 10 Nederland bijgewerkt" && git push)

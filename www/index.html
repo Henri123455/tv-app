@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TV">
+<script>
+  // Licht/donker meteen goed zetten (voor het eerste beeld), keuze staat per apparaat
+  (function () {
+    var t = 'auto';
+    try { t = JSON.parse(localStorage.getItem('theme')) || 'auto'; } catch (e) {}
+    var light = t === 'light' || (t === 'auto' && matchMedia('(prefers-color-scheme: light)').matches);
+    document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  })();
+</script>
+<link rel="icon" href="icon.svg?v=8">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=8">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://image.tmdb.org">
+<title>TV</title>
+<link rel="stylesheet" href="style.css?v=8">
+</head>
+<body>
+
+<!-- Opstartscherm -->
+<div id="splash" class="splash"><img src="icon.svg" alt=""></div>
+
+<!-- Inloggen -->
+<section id="login" class="login" hidden>
+  <form id="loginForm" class="login-card">
+    <img class="app-icon" src="icon.svg" alt="">
+    <h1>Welkom bij TV</h1>
+    <p class="muted">Log in met de Xtream Codes-gegevens van je abonnement.</p>
+    <div class="field-group">
+      <input name="server" placeholder="Server (bijv. http://server.link)" required autocomplete="url" inputmode="url">
+      <input name="username" placeholder="Gebruikersnaam" required autocomplete="username" autocapitalize="off">
+      <input name="password" type="password" placeholder="Wachtwoord" required autocomplete="current-password">
+    </div>
+    <button class="btn primary wide" type="submit">Inloggen</button>
+    <p id="loginError" class="error"></p>
+  </form>
+</section>
+
+<!-- Wie kijkt er? -->
+<section id="who" class="who" hidden>
+  <h1>Wie kijkt er?</h1>
+  <div class="who-list" id="whoList"></div>
+  <button class="link" id="whoEdit">Profielen beheren</button>
+</section>
+
+<!-- Navigatie -->
+<nav id="nav" class="nav" hidden>
+  <div class="nav-pill">
+    <button data-tab="live" class="active"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/></svg><span>Live TV</span></button>
+    <button data-tab="vod"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 8h16M4 16h16M9 3v18M15 3v18"/></svg><span>Films</span></button>
+    <button data-tab="series"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 3l4 4 4-4"/></svg><span>Series</span></button>
+    <button data-tab="archive"><svg viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 4v4h4"/><path d="M12 7.5V12l3 2"/></svg><span>Terugkijken</span></button>
+    <button data-tab="mine"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg><span>Mijn lijst</span></button>
+    <button data-tab="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><span>Zoeken</span></button>
+  </div>
+  <button id="accountBtn" class="nav-account" title="Profiel en delen"></button>
+</nav>
+
+<main id="main"></main>
+
+<!-- Speler -->
+<div id="player" class="player" hidden>
+  <video id="video" playsinline webkit-playsinline x-webkit-airplay="allow" preload="auto"></video>
+  <div class="p-spinner" id="pSpinner"></div>
+  <div class="p-msg" id="pMsg" hidden></div>
+
+  <div class="p-ui" id="pUi">
+    <div class="p-top">
+      <button class="round" id="pBack" title="Terug (Esc)"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="p-title">
+        <div id="pTitle"></div>
+        <div id="pSub" class="muted"></div>
+      </div>
+      <span class="badge" id="pBadge"></span>
+      <button class="round" id="pQuality" title="Andere bron"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
+      <button class="round" id="pFav" title="Opslaan in Mijn lijst"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg></button>
+      <button class="round" id="pCast" title="Naar tv sturen"><svg viewBox="0 0 24 24"><path d="M3 16a5 5 0 0 1 5 5M3 12a9 9 0 0 1 9 9M3 8V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/><path d="M3 20h.01"/></svg></button>
+      <button class="round" id="pPip" title="Beeld-in-beeld"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1" fill="currentColor"/></svg></button>
+      <button class="round" id="pFull" title="Volledig scherm (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    </div>
+
+    <div class="p-bottom">
+      <div class="p-controls">
+        <button class="round" id="pPrev" title="Vorige zender (â†‘)"><svg viewBox="0 0 24 24"><path d="M6 5v14M19 5l-9 7 9 7z"/></svg></button>
+        <button class="round big" id="pPlay" title="Afspelen/pauze (spatie)"><svg viewBox="0 0 24 24" class="i-pause"><path d="M8 5v14M16 5v14"/></svg><svg viewBox="0 0 24 24" class="i-play"><path d="M7 4l13 8-13 8z" fill="currentColor"/></svg></button>
+        <button class="round" id="pNext" title="Volgende zender (â†“)"><svg viewBox="0 0 24 24"><path d="M18 5v14M5 5l9 7-9 7z"/></svg></button>
+        <span class="live-dot" id="pLive">LIVE</span>
+        <div class="p-seek" id="pSeekWrap">
+          <span id="pCur">0:00</span>
+          <input type="range" id="pSeek" min="0" max="1000" value="0">
+          <span id="pDur">0:00</span>
+        </div>
+        <button class="round" id="pList" title="Zenders"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <aside class="p-side" id="pSide" hidden>
+    <div class="p-side-head"><strong id="pSideTitle">Zenders</strong><button class="round sm" id="pSideClose"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="p-side-list" id="pSideList"></div>
+  </aside>
+</div>
+
+<!-- Detail-sheet -->
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-card" id="sheetCard"></div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="capacitor.js"></script>
+<script src="build-info.js"></script>
+<script src="backend.js"></script>
+<script src="app.js"></script>
+<script src="native.js"></script>
+</body>
+</html>

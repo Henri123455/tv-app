@@ -1,0 +1,19 @@
+{
+  "name": "tv-iphone-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TV: IPTV-speler in Apple TV-stijl als iPhone-app (zonder pc)",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "serve": "node scripts/serve.js"
+  },
+  "dependencies": {
+    "@capacitor/core": "6.2.2",
+    "@capacitor/ios": "6.2.2",
+    "capacitor-video-player": "6.0.2",
+    "hls.js": "1.6.19"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "6.2.2"
+  }
+}

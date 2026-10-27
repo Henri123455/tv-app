@@ -1,0 +1,15 @@
+{
+  "appId": "nl.tvapp.speler",
+  "appName": "TV",
+  "webDir": "www",
+  "backgroundColor": "#000000",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#000000",
+    "allowsLinkPreview": false,
+    "scrollEnabled": true
+  },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}

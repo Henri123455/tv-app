@@ -1,0 +1,82 @@
+# Bouwt de iPhone-app (TV.ipa) op een Mac van GitHub. Gratis; duurt ongeveer 10 minuten.
+# Start vanzelf als je iets aan de app verandert, of met de hand: Actions -> "iPhone-app bouwen" -> Run workflow.
+# De app is niet ondertekend; SideStore ondertekent hem op je iPhone met je eigen Apple ID.
+name: iPhone-app bouwen
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['data/**', '**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Onderdelen installeren
+        run: npm install
+
+      - name: Repo-naam in de app (voor de Netflix Top 10 Nederland)
+        run: echo "window.TV_REPO = '${{ github.repository }}';" > www/build-info.js
+
+      - name: iPhone-project maken
+        run: |
+          npx cap add ios
+          npx cap sync ios
+
+      - name: Instellingen (http-streams, geluid op de achtergrond, VLC, icoon)
+        run: |
+          PL=ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsForMedia bool true" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :LSApplicationQueriesSchemes array" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :LSApplicationQueriesSchemes:0 string vlc-x-callback" $PL || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName TV" $PL || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string TV" $PL
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.${{ github.run_number }}" $PL || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" $PL || true
+          ICON=ios/App/App/Assets.xcassets/AppIcon.appiconset
+          rm -f $ICON/*
+          cp resources/icon-1024.png $ICON/icon-1024.png
+          cat > $ICON/Contents.json <<'EOF'
+          {"images":[{"filename":"icon-1024.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}
+          EOF
+
+      - name: Bouwen
+        run: |
+          cd ios/App
+          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | tail -n 40
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP" && zip -qr TV.ipa Payload
+          ls -lh "$RUNNER_TEMP/TV.ipa"
+
+      - name: Bewaren als download
+        uses: actions/upload-artifact@v4
+        with:
+          name: TV-iPhone-app
+          path: ${{ runner.temp }}/TV.ipa
+
+      - name: Klaarzetten bij Releases (vaste downloadlink)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.${{ github.run_number }}
+          name: TV 1.${{ github.run_number }}
+          body: Download TV.ipa op je iPhone en open hem met SideStore.
+          files: ${{ runner.temp }}/TV.ipa
+          make_latest: true
