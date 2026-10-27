@@ -80,3 +80,12 @@ jobs:
           body: Download TV.ipa op je iPhone en open hem met SideStore.
           files: ${{ runner.temp }}/TV.ipa
           make_latest: true
+
+      - name: SideStore-bron bijwerken (installeren en updates met één tik)
+        run: |
+          node scripts/source.js "1.${{ github.run_number }}" "$(stat -f%z "$RUNNER_TEMP/TV.ipa")" "${{ github.repository }}"
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add data/source.json
+          git commit -m "SideStore-bron: TV 1.${{ github.run_number }}" || exit 0
+          git pull --rebase && git push

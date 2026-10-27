@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TV op je iPhone</title>
+<style>
+  :root { --bg: #000; --card: #1c1c1e; --text: #f5f5f7; --muted: #8e8e93; --blue: #0a84ff; --green: #30d158; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: radial-gradient(1000px 600px at 50% -10%, #1d2230, #000 60%); color: var(--text); font: 16px/1.5 -apple-system, "Segoe UI Variable Display", "Segoe UI", sans-serif; min-height: 100vh; }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 16px 60px; }
+  header { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; }
+  header img { width: 72px; height: 72px; }
+  h1 { margin: 0; font-size: 34px; letter-spacing: -.03em; }
+  .lead { margin: 2px 0 0; color: var(--muted); }
+  .step { display: flex; gap: 16px; background: var(--card); border-radius: 20px; padding: 20px; margin-bottom: 12px; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); }
+  .step.done { opacity: .5; }
+  .num { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--blue); display: grid; place-items: center; font-weight: 800; }
+  .step.done .num { background: var(--green); }
+  .step h2 { margin: 3px 0 6px; font-size: 19px; }
+  .step p, .step li { margin: 4px 0; color: rgba(255,255,255,.85); }
+  .step ol { margin: 6px 0 0; padding-left: 20px; }
+  .where { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 6px; background: rgba(255,255,255,.1); margin-bottom: 4px; }
+  .qr-row { display: flex; gap: 18px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .qr { width: 150px; height: 150px; background: #fff; border-radius: 14px; padding: 8px; flex: none; }
+  .qr svg { width: 100%; height: 100%; }
+  code { background: #000; padding: 3px 7px; border-radius: 6px; font-size: 13px; word-break: break-all; }
+  b { color: #fff; }
+  .tick { margin-left: auto; align-self: flex-start; }
+  .tick input { width: 22px; height: 22px; accent-color: var(--green); }
+</style>
+</head>
+<body>
+<main>
+  <header><img src="resources/icon-1024.png" alt=""><div><h1>TV op je iPhone</h1><p class="lead">5 stappen, één keer. Daarna heb je de pc niet meer nodig.</p></div></header>
+
+  <div class="step done">
+    <div class="num">1</div>
+    <div><span class="where">pc · al gedaan</span><h2>iTunes en iloader staan klaar</h2><p>Dit heeft het bestand voor je geregeld.</p></div>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <div><span class="where">pc · iloader</span><h2>SideStore op je iPhone zetten</h2>
+      <ol><li>iPhone met de kabel aan de pc, en op de iPhone <b>Vertrouw</b> tikken.</li>
+        <li>In <b>iloader</b>: log in met je <b>Apple ID</b> en kies je iPhone.</li>
+        <li>Klik op <b>Install SideStore (Stable)</b> en wacht tot het klaar is.</li></ol></div>
+    <label class="tick"><input type="checkbox"></label>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <div><span class="where">iPhone · instellingen</span><h2>Toestemming geven</h2>
+      <ol><li><b>Instellingen → Algemeen → VPN en apparaatbeheer</b> → tik op je Apple ID → <b>Vertrouw</b>.</li>
+        <li><b>Instellingen → Privacy en beveiliging → Ontwikkelaarsmodus</b> → aan. De iPhone herstart.</li></ol></div>
+    <label class="tick"><input type="checkbox"></label>
+  </div>
+
+  <div class="step">
+    <div class="num">4</div>
+    <div><span class="where">iPhone · camera</span><h2>LocalDevVPN installeren</h2>
+      <div class="qr-row"><div class="qr" data-qr="https://apps.apple.com/app/localdevvpn/id6755608044"></div>
+        <div><p>Scan de code met je camera en installeer <b>LocalDevVPN</b>.</p><p>Open het, tik op <b>Connect</b> en op <b>Sta toe</b>. Hiermee ververst SideStore zonder pc.</p></div></div></div>
+    <label class="tick"><input type="checkbox"></label>
+  </div>
+
+  <div class="step">
+    <div class="num">5</div>
+    <div><span class="where">iPhone · camera</span><h2>TV installeren</h2>
+      <div class="qr-row"><div class="qr" id="srcqr"></div>
+        <div><p>Open eerst <b>SideStore</b> en log in met je Apple ID.</p><p>Scan dan deze code: SideStore toont <b>TV</b>, tik op <b>Installeer</b>. Nieuwe versies krijg je vanzelf als update.</p>
+          <p style="color:var(--muted);font-size:13px">Werkt de code niet? In SideStore: <b>Bronnen → +</b> en plak:<br><code id="srcurl"></code></p></div></div></div>
+    <label class="tick"><input type="checkbox"></label>
+  </div>
+
+  <div class="step">
+    <div class="num" style="background:#5e5ce6">✓</div>
+    <div><h2>Klaar</h2><p>Open <b>TV</b>, log in met de gegevens uit WhatsApp en maak je profiel.</p>
+      <p style="color:var(--muted)">Eén keer per week: open SideStore (LocalDevVPN aan) en tik op <b>7 DAGEN</b> naast TV om te vernieuwen.</p></div>
+  </div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script>
+  const SOURCE = 'https://raw.githubusercontent.com/Henri123455/tv-app/main/data/source.json';
+  document.getElementById('srcqr').dataset.qr = 'sidestore://source?url=' + SOURCE;
+  document.getElementById('srcurl').textContent = SOURCE;
+  for (const el of document.querySelectorAll('[data-qr]')) {
+    const q = qrcode(0, 'M'); q.addData(el.dataset.qr); q.make();
+    el.innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  }
+  document.querySelectorAll('.tick input').forEach((c, i) => {
+    const k = 'tvstap' + i; c.checked = localStorage.getItem(k) === '1';
+    const upd = () => { c.closest('.step').classList.toggle('done', c.checked); localStorage.setItem(k, c.checked ? '1' : '0'); };
+    c.onchange = upd; upd();
+  });
+</script>
+</body>
+</html>
