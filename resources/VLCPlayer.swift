@@ -114,7 +114,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
 
         subsButton.setImage(UIImage(systemName: "captions.bubble", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)), for: .normal)
         subsButton.tintColor = .white
-        subsButton.showsMenuAsPrimaryAction = true
+        if #available(iOS 14.0, *) { subsButton.showsMenuAsPrimaryAction = true }
         subsButton.isHidden = true
 
         for v in [close, back, fwd, playButton, title, timeLabel, slider, subsButton] as [UIView] {
@@ -270,6 +270,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
     }
 
     private func buildSubtitleMenu(_ choices: [(name: String, index: Int32, lang: String)]) {
+        guard #available(iOS 14.0, *) else { return }
         subsButton.isHidden = choices.isEmpty
         let current = player.currentVideoSubTitleIndex
         var actions = [UIAction(title: "Uit", state: current < 0 ? .on : .off) { [weak self] _ in
