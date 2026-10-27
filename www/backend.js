@@ -650,11 +650,15 @@ const profiles = () => readJSON('profiles', []);
 const profData = id => readJSON('prof:' + id, { favs: [], history: [] });
 const newId = () => [...crypto.getRandomValues(new Uint8Array(5))].map(b => b.toString(16).padStart(2, '0')).join('');
 
+const searchCache = new Map();
+// Alles alvast klaarzetten na het openen, zodat wisselen naar Films/Series/Zoeken meteen gaat
 function warmUp() {
   if (!cfg) return;
   loadNetflixNL();
-  categories('live').then(() => list('live')).then(() => liveHome()).catch(() => {});
-  for (const t of ['vod', 'series']) categories(t).catch(() => {});
+  categories('live').then(() => list('live')).then(() => liveHome())
+    .then(() => route('/api/rows?type=vod', {})).then(() => route('/api/rows?type=series', {}))
+    .then(() => { for (const t of ['live', 'vod', 'series']) list(t).then(l => searchIndex(t, l)); })
+    .catch(() => {});
 }
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -737,9 +741,12 @@ async function route(url, init) {
     return memo(pool, 'latest', () => pool.filter(x => x.i && !KIDS_ROW.test(x.n.toUpperCase())).sort((a, b) => b.a - a.a).slice(0, 40));
   }
   if (p === '/api/search' || p === '/api/suggest') {
-    // Eerst zoeken in alles wat al klaarstaat; de complete lijsten komen op de achtergrond binnen
-    loadFull('vod').catch(() => {}); loadFull('series').catch(() => {});
-    const r = await search(q.q, p === '/api/search' ? q.sort : 'match');
+    // Zoeken in alle zenders en alle Nederlandse films/series (die staan al op de telefoon).
+    // De complete buitenlandse lijst (129.000 films) halen we hier bewust níet op: te zwaar voor een telefoon.
+    const sort = p === '/api/search' ? (q.sort || 'match') : 'match';
+    const key = sort + '|' + fold(q.q || '').trim();
+    if (!searchCache.has(key)) { searchCache.set(key, search(q.q, sort)); if (searchCache.size > 40) searchCache.delete(searchCache.keys().next().value); }
+    const r = await searchCache.get(key);
     if (p === '/api/search') return r;
     const seen = new Set(), out = [];
     for (const x of [...r.live, ...r.vod, ...r.series].sort((a, b) => b.score - a.score || b.nl - a.nl)) {

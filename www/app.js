@@ -205,13 +205,27 @@ function cardHTML(type, x, opt = {}) {
   if (!img && !live) needArt(type, x.id);
   const prog = opt.progress ? `<div class="progress"><i style="width:${Math.min(100, opt.progress * 100).toFixed(1)}%"></i></div>` : '';
   return `<button class="card ${live ? 'live' : 'poster'}" data-k="${esc(k)}">
-    <div class="art">${img ? `<img loading="lazy" decoding="async" referrerpolicy="no-referrer" alt="${esc(x.n)}" src="${esc(live ? img : sized(img))}">` : live ? `<span class="initials">${initials(x.n)}</span>` : placeholder(x.n)}
+    <div class="art">${img ? `<img decoding="async" referrerpolicy="no-referrer" alt="${esc(x.n)}" data-src="${esc(live ? img : sized(img))}">` : live ? `<span class="initials">${initials(x.n)}</span>` : placeholder(x.n)}
       <span class="fav-badge ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}">${HEART}</span>${prog}</div>
     <div class="name">${esc(tidyName(x.n))}</div>${opt.sub ? `<div class="sub">${esc(opt.sub)}</div>` : ''}
   </button>`;
 }
 // Afbeeldingen zacht laten infaden; kapotte logo's vervangen door initialen
 document.addEventListener('load', e => { if (e.target.tagName === 'IMG') e.target.classList.add('ld'); }, true);
+// Eigen "lui laden" van plaatjes: pas laden als een kaart bijna in beeld komt. Werkt ook in de
+// zijwaartse rijen op de iPhone (daar laat het ingebouwde loading="lazy" plaatjes soms helemaal weg).
+const imgIO = new IntersectionObserver(es => es.forEach(e => {
+  if (!e.isIntersecting) return;
+  const im = e.target; imgIO.unobserve(im);
+  if (im.dataset.src) { im.src = im.dataset.src; im.removeAttribute('data-src'); }
+}), { rootMargin: '700px 900px' });
+new MutationObserver(ms => {
+  for (const m of ms) for (const n of m.addedNodes) {
+    if (n.nodeType !== 1) continue;
+    if (n.matches('img[data-src]')) imgIO.observe(n);
+    else n.querySelectorAll('img[data-src]').forEach(i => imgIO.observe(i));
+  }
+}).observe(document.documentElement, { childList: true, subtree: true });
 document.addEventListener('error', e => {
   const img = e.target;
   if (img.tagName !== 'IMG' || !img.closest('.art')) return;
@@ -620,18 +634,27 @@ async function renderBrowseHero(type, hero, nl) {
   } catch { hero.classList.add('flat'); }
 }
 
+// Mijn lijst: twee tabbladen, "Opgeslagen" (hartjes) en "Recent bekeken" (met hoe ver je was)
 function renderMine() {
   const page = S.pages.mine;
-  const groups = [['live', 'Zenders'], ['vod', 'Films'], ['series', 'Series']].filter(([t]) => S.favs.some(f => f.type === t));
-  if (!S.favs.length) {
-    page.innerHTML = `<div class="top-pad"><div class="empty"><div class="empty-icon">${HEART}</div><h3>Nog niets opgeslagen</h3><p>Tik op het hartje bij een zender, film of serie (of houd een kaart ingedrukt).<br>Je lijst is van jouw profiel en is hetzelfde op je pc en telefoon.</p></div></div>`;
+  const view = store.get('mine-view', 'saved');
+  page.innerHTML = `<div class="grid-page top-pad"><h2 class="page-title">Mijn lijst</h2>
+    <div class="seg mine-seg"><button data-view="saved" class="${view === 'saved' ? 'active' : ''}">Opgeslagen</button><button data-view="recent" class="${view === 'recent' ? 'active' : ''}">Recent bekeken</button></div>
+    <div class="mine-body"></div></div>`;
+  $$('.mine-seg button', page).forEach(b => b.onclick = () => { store.set('mine-view', b.dataset.view); renderMine(); });
+  const body = $('.mine-body', page);
+  const list = view === 'saved' ? S.favs : hist();
+  if (!list.length) {
+    body.innerHTML = view === 'saved'
+      ? `<div class="empty"><div class="empty-icon">${HEART}</div><h3>Nog niets opgeslagen</h3><p>Tik op het hartje bij een zender, film of serie (of houd een kaart ingedrukt).</p></div>`
+      : `<div class="empty"><h3>Nog niets bekeken</h3><p>Wat je kijkt, verschijnt hier, met hoe ver je was.</p></div>`;
     return;
   }
-  page.innerHTML = `<div class="grid-page top-pad"><h2 class="page-title">Mijn lijst</h2></div>`;
-  for (const [t, label] of groups) {
-    const l = S.favs.filter(f => f.type === t);
-    $('.grid-page', page).insertAdjacentHTML('beforeend', `<h3 class="section-sub">${label}</h3><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx>${l.map(x => cardHTML(t, x)).join('')}</div>`);
-    const g = $$('.grid[data-ctx]', page).pop(); g._list = l; g._type = t;
+  for (const [t, label] of [['live', 'Zenders'], ['vod', 'Films'], ['series', 'Series']]) {
+    const l = list.filter(f => f.type === t);
+    if (!l.length) continue;
+    body.insertAdjacentHTML('beforeend', `<h3 class="section-sub">${label}</h3><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx>${l.map(x => cardHTML(t, x, view === 'recent' && x.dur ? { progress: x.pos / x.dur, sub: x.ep ? `S${x.ep.season} A${x.ep.num}` : '' } : (x.ep ? { sub: `S${x.ep.season} A${x.ep.num}` } : {}))).join('')}</div>`);
+    const g = $$('.grid[data-ctx]', body).pop(); g._list = l; g._type = t;
   }
 }
 

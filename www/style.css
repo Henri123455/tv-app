@@ -592,3 +592,16 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
   .nav-account { transition: opacity .2s; }
   .nav.scrolled .nav-account { opacity: 0; pointer-events: none; }
 }
+
+/* ---------- Mijn lijst: tabbladen ---------- */
+.mine-seg { margin-bottom: 4px; }
+
+/* ---------- iPhone: onderbalk ruim boven de thuisbalk, minder kans op per ongeluk swipen ---------- */
+@media (max-width: 760px) {
+  .nav-pill { padding-bottom: calc(max(6px, env(safe-area-inset-bottom)) + 8px); }
+  .page { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
+}
+@media (hover: none) and (pointer: coarse) {
+  .row { content-visibility: visible; }
+  html, body { overscroll-behavior-y: none; }
+}

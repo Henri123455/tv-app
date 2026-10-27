@@ -33,6 +33,13 @@ jobs:
           npx cap add ios
           npx cap sync ios
 
+      - name: Eigen hoofdscherm (thuisbalk verbergen, geen per-ongeluk-veeg onderin)
+        run: |
+          cp resources/MainViewController.swift ios/App/App/MainViewController.swift
+          ruby -e "require 'xcodeproj'; p = Xcodeproj::Project.open('ios/App/App.xcodeproj'); t = p.targets.find { |x| x.name == 'App' }; g = p.main_group.find_subpath('App', false); f = g.new_reference('MainViewController.swift'); t.add_file_references([f]); p.save"
+          sed -i '' 's/customClass="CAPBridgeViewController" customModule="Capacitor"/customClass="MainViewController" customModule="App" customModuleProvider="target"/' ios/App/App/Base.lproj/Main.storyboard
+          grep -o 'customClass="[A-Za-z]*"' ios/App/App/Base.lproj/Main.storyboard
+
       - name: Instellingen (http-streams, geluid op de achtergrond, VLC, icoon)
         run: |
           PL=ios/App/App/Info.plist
