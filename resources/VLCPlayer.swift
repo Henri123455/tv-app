@@ -36,7 +36,18 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
     private let url: URL
     private let titleText: String
     private let start: Double
-    private let player = VLCMediaPlayer()
+    // Ondertitels in Netflix-stijl: wit, iets vet, dunne donkere rand en zachte schaduw, geen balk erachter
+    private let player: VLCMediaPlayer = VLCMediaPlayer(options: [
+        "--freetype-rel-fontsize=16",
+        "--freetype-bold",
+        "--freetype-color=16777215",
+        "--freetype-outline-thickness=2",
+        "--freetype-outline-opacity=200",
+        "--freetype-shadow-opacity=140",
+        "--freetype-background-opacity=0",
+    ])
+    private let subsButton = UIButton(type: .system)
+    private var subsApplied = false
     private let videoView = UIView()
     private let controls = UIView()
     private let playButton = UIButton(type: .system)
@@ -101,7 +112,12 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         spinner.color = .white
         spinner.hidesWhenStopped = true
 
-        for v in [close, back, fwd, playButton, title, timeLabel, slider] as [UIView] {
+        subsButton.setImage(UIImage(systemName: "captions.bubble", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)), for: .normal)
+        subsButton.tintColor = .white
+        subsButton.showsMenuAsPrimaryAction = true
+        subsButton.isHidden = true
+
+        for v in [close, back, fwd, playButton, title, timeLabel, slider, subsButton] as [UIView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             controls.addSubview(v)
         }
@@ -116,7 +132,11 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
             close.heightAnchor.constraint(equalToConstant: 44),
             title.leadingAnchor.constraint(equalTo: close.trailingAnchor, constant: 12),
             title.centerYAnchor.constraint(equalTo: close.centerYAnchor),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: g.trailingAnchor, constant: -16),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: subsButton.leadingAnchor, constant: -16),
+            subsButton.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -16),
+            subsButton.centerYAnchor.constraint(equalTo: close.centerYAnchor),
+            subsButton.widthAnchor.constraint(equalToConstant: 44),
+            subsButton.heightAnchor.constraint(equalToConstant: 44),
             playButton.centerXAnchor.constraint(equalTo: controls.centerXAnchor),
             playButton.centerYAnchor.constraint(equalTo: controls.centerYAnchor),
             back.centerYAnchor.constraint(equalTo: playButton.centerYAnchor),
@@ -220,9 +240,58 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         }
     }
 
+    // ---- Ondertiteling: alleen Nederlands en Engels, de rest eruit gefilterd ----
+    private static let prefKey = "tvSubtitleLanguage" // "nl", "en" of "off" (standaard: nl)
+
+    private func subtitleChoices() -> [(name: String, index: Int32, lang: String)] {
+        guard let names = player.videoSubTitlesNames as? [String],
+              let indexes = player.videoSubTitlesIndexes as? [NSNumber] else { return [] }
+        var out: [(name: String, index: Int32, lang: String)] = []
+        for (n, i) in zip(names, indexes) where i.int32Value >= 0 {
+            let l = n.lowercased()
+            let isNL = l.contains("dut") || l.contains("nld") || l.contains("dutch") || l.contains("nederlands") || l.range(of: "\\bnl\\b", options: .regularExpression) != nil
+            let isEN = !isNL && (l.contains("eng") || l.range(of: "\\ben\\b", options: .regularExpression) != nil)
+            let lang = isNL ? "nl" : (isEN ? "en" : "")
+            if lang.isEmpty || out.contains(where: { $0.lang == lang }) { continue }
+            out.append((name: lang == "nl" ? "Nederlands" : "English", index: i.int32Value, lang: lang))
+        }
+        return out.sorted { $0.lang == "nl" && $1.lang != "nl" }
+    }
+
+    private func applySubtitles() {
+        let choices = subtitleChoices()
+        let pref = UserDefaults.standard.string(forKey: Self.prefKey) ?? "nl"
+        if pref != "off", let pick = choices.first(where: { $0.lang == pref }) ?? choices.first {
+            player.currentVideoSubTitleIndex = pick.index
+        } else {
+            player.currentVideoSubTitleIndex = -1 // geen ondertitel (ook geen andere taal)
+        }
+        buildSubtitleMenu(choices)
+    }
+
+    private func buildSubtitleMenu(_ choices: [(name: String, index: Int32, lang: String)]) {
+        subsButton.isHidden = choices.isEmpty
+        let current = player.currentVideoSubTitleIndex
+        var actions = [UIAction(title: "Uit", state: current < 0 ? .on : .off) { [weak self] _ in
+            UserDefaults.standard.set("off", forKey: Self.prefKey)
+            self?.player.currentVideoSubTitleIndex = -1
+            self?.buildSubtitleMenu(choices)
+        }]
+        for c in choices {
+            actions.append(UIAction(title: c.name, state: current == c.index ? .on : .off) { [weak self] _ in
+                UserDefaults.standard.set(c.lang, forKey: Self.prefKey)
+                self?.player.currentVideoSubTitleIndex = c.index
+                self?.buildSubtitleMenu(choices)
+            })
+        }
+        subsButton.menu = UIMenu(title: "Ondertiteling", children: actions)
+    }
+
     func mediaPlayerTimeChanged(_ aNotification: Notification) {
         everPlayed = true
         spinner.stopAnimating()
+        // Zodra de film loopt zijn de ondertitels bekend: Nederlands aan (of je eigen keuze), andere talen nooit
+        if !subsApplied && player.time.intValue > 800 { subsApplied = true; applySubtitles() }
         if seeking { return }
         slider.value = player.position
         let len = Double(player.media?.length.intValue ?? 0) / 1000
