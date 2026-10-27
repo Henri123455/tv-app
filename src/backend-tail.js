@@ -88,7 +88,7 @@ async function route(url, init) {
     if (!/^https?:\/\//.test(c.server)) c.server = 'http://' + c.server;
     let info;
     try { info = await (await realFetch(apiURL({}, c), { signal: AbortSignal.timeout(15000) })).json(); }
-    catch { throw new HttpError(502, 'Server niet bereikbaar'); }
+    catch (e) { throw new HttpError(502, 'Server niet bereikbaar (' + (e && e.message || e) + ')'); }
     if (Number(info?.user_info?.auth) !== 1) throw new HttpError(401, 'Gebruikersnaam of wachtwoord klopt niet');
     cfg = c; account = info; cache.clear(); writeJSON('config', cfg);
     warmUp();

@@ -36,10 +36,12 @@ jobs:
       - name: Instellingen (http-streams, geluid op de achtergrond, VLC, icoon)
         run: |
           PL=ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PL || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PL || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsForMedia bool true" $PL || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PL || true
+          # Alleen NSAllowsArbitraryLoads: staan ...ForMedia of ...InWebContent er ook in, dan negeert iOS deze sleutel
+          # en worden http-verbindingen naar de aanbieder geblokkeerd ("Server niet bereikbaar")
+          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PL
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PL
+          /usr/libexec/PlistBuddy -c "Print :NSAppTransportSecurity" $PL
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" $PL || true
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" $PL || true
           /usr/libexec/PlistBuddy -c "Add :LSApplicationQueriesSchemes array" $PL || true
