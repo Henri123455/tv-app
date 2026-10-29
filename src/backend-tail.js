@@ -53,6 +53,12 @@ async function list(type, cat) {
   return fullReady[type] || nlItems(type);
 }
 
+// Alleen de gevraagde categorieën ophalen (bijv. de kinder-categorieën), niet alles
+async function listCats(type, ids) {
+  const parts = await Promise.all([...ids].map(id => fetchList(type, id).catch(() => [])));
+  return concatStable(`cats:${type}:${[...ids].join(',')}`, parts);
+}
+
 // Profielen, lijstjes en verder kijken: op de telefoon zelf
 const COLORS = ['#ff375f', '#0a84ff', '#30d158', '#ff9f0a', '#bf5af2', '#64d2ff', '#ffd60a', '#ac8e68'];
 const profiles = () => readJSON('profiles', []);
@@ -165,7 +171,7 @@ async function route(url, init) {
   if (p === '/api/art') return artFor(q.type === 'series' ? 'series' : 'vod', String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)));
   if (p === '/api/latest') {
     const pool = await nlPool('vod');
-    return memo(pool, 'latest', () => pool.filter(x => x.i && !KIDS_ROW.test(x.n.toUpperCase())).sort((a, b) => b.a - a.a).slice(0, 40));
+    return memo(pool, 'latest', () => pool.filter(x => x.i && !KIDS_ROW.test(x.n.toUpperCase()) && !isKid('vod', x)).sort((a, b) => b.a - a.a).slice(0, 40));
   }
   if (p === '/api/search' || p === '/api/suggest') {
     // Zoeken in alle zenders en alle Nederlandse films/series (die staan al op de telefoon).

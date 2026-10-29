@@ -188,8 +188,28 @@ function popScore(type, x) {
   const n = (type === 'vod' ? nf.films : nf.tv).get(popKey(x.n)) || 0;
   const v = viewTrend(`${type}:${x.id}`);
   const ageDays = x.a ? (Date.now() / 1000 - x.a) / 86400 : 999;
-  // Wat Nederland deze week kijkt telt het zwaarst, daarna wat er in deze app bekeken wordt
-  return n * 100 + v * 60 + (x.r || 0) * 3 + Math.max(0, 90 - ageDays) / 90 * 25;
+  // Wat Nederland deze week kijkt telt het zwaarst, daarna wat er in deze app bekeken wordt.
+  // Echte kinderfilms/-series altijd achteraan (in de kinderrijen zelf blijft de volgorde gewoon kloppen)
+  return n * 100 + v * 60 + (x.r || 0) * 3 + Math.max(0, 90 - ageDays) / 90 * 25 - (isKid(type, x) ? 1e6 : 0);
+}
+// Elke score één keer uitrekenen en dan sorteren (scheelt veel rekenwerk op de telefoon)
+const byPop = (type, items) => items.map(x => [popScore(type, x), x]).sort((a, b) => b[0] - a[0]).map(e => e[1]);
+
+// ---------- Echte kinderfilms: alles uit de kinder-categorieën (Kinderfilms, Bioscoop Kids, Disney+ Kids, NL gesproken …) ----------
+// Niet weg, wel achteraan. Gezinsfilms die niet in zo'n categorie staan blijven gewoon vooraan.
+const KIDS_CAT = /KIDS|KINDER|GESPROKEN|SINTERKLAAS|CARTOON|JUNIOR/;
+const kidKeys = { vod: new Set(), series: new Set() };
+// Ook "NL gesproken" (Nederlands nagesproken) telt als kinderfilm, waar die ook staat
+const isKid = (type, x) => /GESPROKEN/i.test(x.n || '') || (!!kidKeys[type]?.size && kidKeys[type].has(titleKey(x.n)));
+// Titels uit een paar categorieën (op de telefoon vervangen door alleen die categorieën ophalen)
+async function listCats(type, ids) { const all = await list(type); return memo(all, 'cats:' + [...ids].join(','), () => all.filter(x => ids.has(x.c))); }
+async function loadKids(type) {
+  if (type === 'live') return 0;
+  const cats = await categories(type);
+  const ids = new Set(cats.filter(c => c.code === 'NL' && KIDS_CAT.test(plain(c.name).toUpperCase())).map(c => c.id));
+  const items = await listCats(type, ids);
+  kidKeys[type] = memo(items, 'kids', () => new Set(items.map(x => titleKey(x.n))));
+  return kidKeys[type].size;
 }
 
 // ---------- Eén versie per titel, Nederlands gaat voor ----------
@@ -227,8 +247,8 @@ async function versionsOf(type, id, name, items) {
 }
 
 async function nlPool(type) {
-  const [all, nlSet] = await Promise.all([list(type), nlCatSet(type)]);
-  return memo(all, 'nlpool:' + nf.v + ':' + viewsVersion, () => dedupe(all.filter(x => nlSet.has(x.c)), nlSet).sort((a, b) => popScore(type, b) - popScore(type, a)));
+  const [all, nlSet, kids] = await Promise.all([list(type), nlCatSet(type), loadKids(type)]);
+  return memo(all, `nlpool:${nf.v}:${viewsVersion}:${kids}`, () => byPop(type, dedupe(all.filter(x => nlSet.has(x.c)), nlSet)));
 }
 async function nlKeys(type) {
   const pool = await nlPool(type);
@@ -238,19 +258,19 @@ async function nlKeys(type) {
 async function allPool(type) {
   const [all, nlSet, pool] = await Promise.all([list(type), nlCatSet(type), nlPool(type)]);
   const keys = await nlKeys(type);
-  return memo(pool, 'all', () => [...pool, ...dedupe(all.filter(x => !nlSet.has(x.c) && !keys.has(titleKey(x.n))), nlSet).sort((a, b) => popScore(type, b) - popScore(type, a))]);
+  return memo(pool, 'all', () => [...pool, ...byPop(type, dedupe(all.filter(x => !nlSet.has(x.c) && !keys.has(titleKey(x.n))), nlSet))]);
 }
 
 // Eén rij (categorie of samengevoegde categorieën, bijv. "Bioscoop" + "Bioscoop HQ"), populairste links
 async function catList(type, all, catIds) {
-  const [nlSet] = await Promise.all([nlCatSet(type)]);
+  const [nlSet, kids] = await Promise.all([nlCatSet(type), loadKids(type)]);
   const ids = new Set(catIds.split(','));
   const isNL = [...ids].some(id => nlSet.has(id));
   const keys = isNL ? null : await nlKeys(type);
-  return memo(all, `cat:${catIds}:${nf.v}:${viewsVersion}`, () => {
+  return memo(all, `cat:${catIds}:${nf.v}:${viewsVersion}:${kids}`, () => {
     let items = dedupe(all.filter(x => ids.has(x.c)), nlSet);
     if (keys) items = items.filter(x => !keys.has(titleKey(x.n)));
-    return items.sort((a, b) => popScore(type, b) - popScore(type, a));
+    return byPop(type, items);
   });
 }
 
@@ -503,7 +523,7 @@ async function top10(type) {
   } else {
     // Wat in Nederland nu het meest bekeken wordt (Netflix Top 10 NL + kijken in deze app)
     const kids = new Set((await categories(type)).filter(c => c.code === 'NL' && KIDS_ROW.test(plain(c.name).toUpperCase())).map(c => c.id));
-    return (await nlPool(type)).filter(x => x.i && !kids.has(x.c)).slice(0, 10);
+    return (await nlPool(type)).filter(x => x.i && !kids.has(x.c) && !isKid(type, x)).slice(0, 10);
   }
   // Zelfde titel in andere versie (HQ, NL gesproken, …) maar één keer
   const keyOf = x => fold(x.n).replace(/\[[^\]]*\]|\b(hq|4k|uhd|nl gesproken)\b/g, '').replace(/[^a-z0-9]+/g, '');
@@ -659,6 +679,12 @@ async function list(type, cat) {
   return fullReady[type] || nlItems(type);
 }
 
+// Alleen de gevraagde categorieën ophalen (bijv. de kinder-categorieën), niet alles
+async function listCats(type, ids) {
+  const parts = await Promise.all([...ids].map(id => fetchList(type, id).catch(() => [])));
+  return concatStable(`cats:${type}:${[...ids].join(',')}`, parts);
+}
+
 // Profielen, lijstjes en verder kijken: op de telefoon zelf
 const COLORS = ['#ff375f', '#0a84ff', '#30d158', '#ff9f0a', '#bf5af2', '#64d2ff', '#ffd60a', '#ac8e68'];
 const profiles = () => readJSON('profiles', []);
@@ -771,7 +797,7 @@ async function route(url, init) {
   if (p === '/api/art') return artFor(q.type === 'series' ? 'series' : 'vod', String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)));
   if (p === '/api/latest') {
     const pool = await nlPool('vod');
-    return memo(pool, 'latest', () => pool.filter(x => x.i && !KIDS_ROW.test(x.n.toUpperCase())).sort((a, b) => b.a - a.a).slice(0, 40));
+    return memo(pool, 'latest', () => pool.filter(x => x.i && !KIDS_ROW.test(x.n.toUpperCase()) && !isKid('vod', x)).sort((a, b) => b.a - a.a).slice(0, 40));
   }
   if (p === '/api/search' || p === '/api/suggest') {
     // Zoeken in alle zenders en alle Nederlandse films/series (die staan al op de telefoon).
