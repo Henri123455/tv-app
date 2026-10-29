@@ -611,7 +611,11 @@ async function renderBrowse(type) {
     const label = type === 'vod' ? 'films' : 'series';
     nlBox.insertAdjacentHTML('beforeend', `<div class="all-wrap"><button class="all-btn"><span><b>Alle ${label}</b><small>Nederlands eerst, populairste bovenaan</small></span>${CHEVRON}</button></div>`);
     $('.all-btn', nlBox).onclick = () => openGridPaged(`Alle ${label}`, type);
-    api(`/api/all?type=${type}&limit=1`).then(r => { $('.all-btn small', nlBox).textContent = `${r.total.toLocaleString('nl-NL')} titels · Nederlands eerst, populairste bovenaan`; }).catch(() => {});
+    // Het aantal titels is bijzaak: uit het geheugen, en pas na een paar seconden opnieuw tellen (veel rekenwerk op de telefoon)
+    const showTotal = r => { $('.all-btn small', nlBox).textContent = `${r.total.toLocaleString('nl-NL')} titels · Nederlands eerst, populairste bovenaan`; };
+    const savedTotal = store.get('c:/api/all?type=' + type, null);
+    if (savedTotal) showTotal(savedTotal);
+    setTimeout(() => api(`/api/all?type=${type}&limit=1`).then(r => { store.set('c:/api/all?type=' + type, { total: r.total }); showTotal(r); }).catch(() => {}), IS_APP ? 8000 : 0);
   }
   const other = $('.rows-other', page);
   if (!groups.size) return;
@@ -630,35 +634,36 @@ async function renderBrowse(type) {
   pick(groups.has(saved) ? saved : groups.has('BE') ? 'BE' : groups.keys().next().value);
 }
 
+// Welke titels in de grote banner komen (liefst met een liggende foto, anders met hun eigen poster).
+// Kost tien info-verzoeken en foto-controles, dus de uitkomst wordt een paar uur bewaard.
+async function heroPicks(type, nl) {
+  if (type === 'vod') {
+    const l = await cachedApi('/api/latest');
+    const pool = [...l.filter(x => x.r >= 6), ...l].filter((x, i, a) => a.indexOf(x) === i).slice(0, 10);
+    const infos = await Promise.all(pool.map(x => api('/api/vodinfo?id=' + x.id).catch(() => ({}))));
+    const bgs = await Promise.all(infos.map((f, n) => f.info && metaMatches(pool[n].n, f.info) ? firstLandscape(f.info.backdrop_path || [], 900) : null));
+    const all = pool.map((it, n) => ({ it, text: (infos[n].info && metaMatches(it.n, infos[n].info) && (infos[n].info.plot || infos[n].info.description)) || '', bg: bgs[n] }));
+    return [...all.filter(s => s.bg), ...all.filter(s => !s.bg && s.it.i)].slice(0, 5);
+  }
+  const l = (await getList('series', nl[0].id)).filter(x => x.b || x.i).slice(0, 10);
+  const bgs = await Promise.all(l.map(x => firstLandscape([x.b], 900)));
+  const all = l.map((it, n) => ({ it, text: it.p || '', bg: bgs[n] }));
+  return [...all.filter(s => s.bg), ...all.filter(s => !s.bg && s.it.i)].slice(0, 5);
+}
 async function renderBrowseHero(type, hero, nl) {
   try {
-    let slides = [];
-    if (type === 'vod') {
-      const l = await cachedApi('/api/latest');
-      const pool = [...l.filter(x => x.r >= 6), ...l].filter((x, i, a) => a.indexOf(x) === i).slice(0, 10);
-      const infos = await Promise.all(pool.map(x => api('/api/vodinfo?id=' + x.id).catch(() => ({}))));
-      const bgs = await Promise.all(infos.map((f, n) => f.info && metaMatches(pool[n].n, f.info) ? firstLandscape(f.info.backdrop_path || [], 900) : null));
-      // Liefst films met een liggende foto, anders met hun eigen poster
-      const all = pool.map((it, n) => ({ it, i: infos[n].info && metaMatches(it.n, infos[n].info) ? infos[n].info : {}, bg: bgs[n] }));
-      slides = [...all.filter(s => s.bg), ...all.filter(s => !s.bg && s.it.i)].slice(0, 5).map(({ it, i, bg }) => {
-        const k = favKey('vod', it.id); items.set(k, { ...it, type: 'vod' });
-        return {
-          bg, poster: bg ? null : it.i, kicker: 'Nieuw · film', title: tidyName(it.n), text: i.plot || i.description || '',
-          actions: `<button class="btn primary" data-open="${esc(k)}">${PLAY_ICON}Bekijk</button><button class="btn glass round-btn ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}" title="Mijn lijst">${HEART}</button>`,
-        };
-      });
-    } else {
-      const l = (await getList('series', nl[0].id)).filter(x => x.b || x.i).slice(0, 10);
-      const bgs = await Promise.all(l.map(x => firstLandscape([x.b], 900)));
-      const all = l.map((it, n) => ({ ...it, bg: bgs[n] }));
-      slides = [...all.filter(x => x.bg), ...all.filter(x => !x.bg && x.i)].slice(0, 5).map(it => {
-        const k = favKey('series', it.id); items.set(k, { ...it, type: 'series' });
-        return {
-          bg: it.bg, poster: it.bg ? null : it.i, kicker: 'Serie', title: tidyName(it.n), text: it.p || '',
-          actions: `<button class="btn primary" data-open="${esc(k)}">${PLAY_ICON}Bekijk</button><button class="btn glass round-btn ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}" title="Mijn lijst">${HEART}</button>`,
-        };
-      });
-    }
+    const key = 'hero:' + type, saved = store.get(key, null);
+    let picks = saved?.picks;
+    const stale = !saved || Date.now() - saved.t > 6 * 3600e3;
+    if (!picks?.length) picks = await heroPicks(type, nl);
+    if (stale) (picks === saved?.picks ? heroPicks(type, nl) : Promise.resolve(picks)).then(p => p.length && store.set(key, { t: Date.now(), picks: p })).catch(() => {});
+    const slides = picks.map(({ it, text, bg }) => {
+      const k = favKey(type, it.id); items.set(k, { ...it, type });
+      return {
+        bg, poster: bg ? null : it.i, kicker: type === 'vod' ? 'Nieuw · film' : 'Serie', title: tidyName(it.n), text,
+        actions: `<button class="btn primary" data-open="${esc(k)}">${PLAY_ICON}Bekijk</button><button class="btn glass round-btn ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}" title="Mijn lijst">${HEART}</button>`,
+      };
+    });
     heroCarousel(hero, slides);
   } catch { hero.classList.add('flat'); }
 }
