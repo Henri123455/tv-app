@@ -285,8 +285,28 @@ const prefetchFrom = e => {
 document.addEventListener('pointerover', prefetchFrom, { passive: true });
 document.addEventListener('touchstart', prefetchFrom, { passive: true });
 
-// Op de iPhone kleinere happen per rij: minder werk tegelijk tijdens snel scrollen
-const CHUNK = matchMedia('(hover: none) and (pointer: coarse)').matches ? 12 : 30;
+// Telefoon-app: de app meet hoe snel dit toestel is (zie measurePerf) en laadt daarnaar:
+// trage telefoon = kleinere happen en minder vooruit laden. De pc-app laadt altijd op volle snelheid.
+const IS_APP = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
+const PERF = IS_APP ? (store.get('perf') || 'normal') : 'fast';
+const TUNE = { slow: { chunk: 8, rows: '700px 0px', search: [4, 6] }, normal: { chunk: 12, rows: '1200px 0px', search: [6, 9] }, fast: { chunk: 30, rows: '1600px 0px', search: [8, 12] } }[PERF];
+const CHUNK = matchMedia('(hover: none) and (pointer: coarse)').matches ? Math.min(TUNE.chunk, 12) : TUNE.chunk;
+function measurePerf() {
+  if (!IS_APP) return;
+  // Een paar seconden na het openen: hoe vloeiend lopen de beelden? (iPhone 11 en ouder komen meestal op "normal" of "slow")
+  setTimeout(() => {
+    let frames = 0, worst = 0, last = performance.now();
+    const t0 = last;
+    const tick = now => {
+      worst = Math.max(worst, now - last); last = now; frames++;
+      if (now - t0 < 1500) return requestAnimationFrame(tick);
+      const fps = frames * 1000 / (now - t0);
+      const p = fps < 40 || worst > 120 ? 'slow' : fps > 57 && worst < 40 ? 'fast' : 'normal';
+      store.set('perf', p);
+    };
+    requestAnimationFrame(tick);
+  }, 6000);
+}
 function fillShelf(shelf, type, list, opt = {}) { // list/opt worden bijgewerkt als de hele rij binnenkomt
   shelf.innerHTML = '';
   shelf._list = list; shelf._type = type;
@@ -339,7 +359,7 @@ function itemsRow(type, title, list, opt = {}) {
 // Rijen pas laden als ze bijna in beeld zijn
 const rowIO = new IntersectionObserver(es => es.forEach(e => {
   if (e.isIntersecting) { rowIO.unobserve(e.target); e.target._load?.(); }
-}), { rootMargin: '1600px 0px' });
+}), { rootMargin: TUNE.rows });
 
 function lazyCategoryRow(type, cat) {
   const title = tidyCat(cat.name);
@@ -459,8 +479,11 @@ function setTab(tab) {
   if (!S.pages[tab] || tab === 'mine') {
     S.pages[tab]?.remove();
     const el = document.createElement('div'); el.className = 'page'; main.appendChild(el); S.pages[tab] = el;
-    Promise.resolve(({ live: renderLive, vod: renderBrowse, series: renderBrowse, archive: renderArchive, mine: renderMine, search: renderSearch })[tab](tab))
+    // Eerst het tabblad meteen laten zien (met laadplaatjes), dan pas opbouwen: één tik is genoeg
+    if (tab === 'vod' || tab === 'series') el.innerHTML = `<header class="hero flat"></header><div class="row"><div class="row-wrap"><div class="shelf">${skeletons(tab, 6)}</div></div></div>`;
+    const render = () => Promise.resolve(({ live: renderLive, vod: renderBrowse, series: renderBrowse, archive: renderArchive, mine: renderMine, search: renderSearch })[tab](tab))
       .finally(() => document.dispatchEvent(new Event('tv-ready')));
+    if (TOUCH && tab !== 'search') requestAnimationFrame(() => setTimeout(() => { if (el.isConnected) render(); }, 0)); else render();
   }
   window.scrollTo(0, S.pages[tab]._scroll || 0);
   store.set('tab', tab);
@@ -765,8 +788,12 @@ function renderSearch() {
         if (my !== seq) return;
         const parts = [['live', 'Zenders'], ['vod', 'Films'], ['series', 'Series']].filter(([t]) => r[t].length);
         if (!parts.length) { out.innerHTML = `<div class="empty"><h3>Niets gevonden</h3><p>Probeer een andere zoekterm.</p></div>`; return; }
-        out.innerHTML = parts.map(([t, label]) => `<h3 class="section-sub">${label} <span class="count">${r[t].length}</span></h3><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx data-type="${t}">${r[t].map(x => cardHTML(t, x)).join('')}</div>`).join('');
+        // Per soort alleen de beste paar; de rest achter "Alles laten zien" (zo hoef je bij een film niet langs 100 zenders)
+        const max = t => TUNE.search[t === 'live' ? 0 : 1] * (TOUCH ? 1 : 2);
+        out.innerHTML = parts.map(([t, label]) => `<h3 class="section-sub">${label} <span class="count">${r[t].length}</span></h3><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx data-type="${t}">${r[t].slice(0, max(t)).map(x => cardHTML(t, x)).join('')}</div>` +
+          (r[t].length > max(t) ? `<button class="show-all" data-all="${t}"><span>Alles laten zien</span><small>${r[t].length} ${label.toLowerCase()}</small>${CHEVRON}</button>` : '')).join('');
         $$('.grid[data-ctx]', out).forEach(g => { g._list = r[g.dataset.type]; g._type = g.dataset.type; });
+        $$('[data-all]', out).forEach(b => b.onclick = () => { const t = b.dataset.all; openGridItems(`${parts.find(p => p[0] === t)[1]} · ${q}`, t, r[t]); });
       } catch { out.innerHTML = '<div class="empty"><p>Zoeken mislukt.</p></div>'; }
     }, now ? 0 : 280);
   };
@@ -1494,8 +1521,10 @@ $('#loginForm').onsubmit = async e => {
 // ================= Start =================
 $$('.nav-pill button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
 let lastScroll = 0, navScrolled = false;
+// window.__lastInput: de achtergrond-voorbereiding in de telefoon-app wacht tot je even niets doet
+addEventListener('pointerdown', () => { window.__lastInput = performance.now(); }, { passive: true, capture: true });
 document.addEventListener('scroll', e => {
-  lastScroll = performance.now();
+  lastScroll = window.__lastInput = performance.now();
   if (e.target !== document) return;
   const s = scrollY > 10;
   if (s !== navScrolled) { navScrolled = s; $('#nav').classList.toggle('scrolled', s); }
@@ -1510,6 +1539,7 @@ function startApp() {
   const t0 = Date.now();
   const ready = () => setTimeout(hideSplash, Math.max(0, 1000 - (Date.now() - t0)) + 250);
   document.addEventListener('tv-ready', ready, { once: true });
+  measurePerf();
   setTimeout(hideSplash, 4000);
   const t = store.get('tab', 'live');
   setTab(['live', 'vod', 'series', 'archive', 'mine', 'search'].includes(t) ? t : 'live');

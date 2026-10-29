@@ -690,3 +690,20 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
   .card .art::before { box-shadow: none; border-top: 1px solid rgba(255,255,255,.18); }
   .card .art { box-shadow: none; }
 }
+
+/* ---------- Zoeken: "Alles laten zien" onder een ingekorte lijst ---------- */
+.show-all { display: flex; align-items: center; gap: 10px; width: calc(100% - 2 * var(--gutter)); margin: 2px var(--gutter) 18px; padding: 14px 18px; border-radius: 16px; text-align: left;
+  background: var(--lg-solid), rgba(255,255,255,.04); box-shadow: var(--lg-edge); font-weight: 700; font-size: 15.5px; }
+.show-all small { color: var(--muted); font-weight: 500; font-size: 13px; margin-left: auto; }
+.show-all svg { width: 18px; height: 18px; stroke-width: 2.6; flex: none; }
+[data-theme="light"] .show-all { background: #fff; box-shadow: 0 0 0 .5px rgba(0,0,0,.08), 0 2px 10px rgba(0,0,0,.05); }
+
+/* ---------- Pc-app zonder witte titelbalk: alleen de vensterknoppen rechtsboven, de rest is de app ---------- */
+@media (display-mode: window-controls-overlay) {
+  html { --tb-h: env(titlebar-area-height, 0px); --tb-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)); }
+  body::after { content: ""; position: fixed; z-index: 34; top: 0; left: 0; right: var(--tb-right); height: var(--tb-h); -webkit-app-region: drag; app-region: drag; }
+  .nav { top: calc(var(--tb-h) + 4px); }
+  .nav-pill, .nav-account, .chips-bar, button, a, input { -webkit-app-region: no-drag; app-region: no-drag; }
+  .nav-account { right: calc(var(--tb-right) + 14px); top: 4px; }
+  .top-pad { padding-top: calc(var(--tb-h) + 24px); }
+}

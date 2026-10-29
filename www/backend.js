@@ -670,9 +670,17 @@ const searchCache = new Map();
 function warmUp() {
   if (!cfg) return;
   loadNetflixNL();
+  // Elke stap pas als je even niet tikt of scrolt: zo reageert de app altijd meteen op je vinger
+  // (dit rekenwerk deelt de telefoon met het scherm). Trage telefoons wachten wat langer.
+  const slow = (() => { try { return JSON.parse(localStorage.getItem('perf')) === 'slow'; } catch { return false; } })();
+  const quiet = () => new Promise(res => {
+    const check = () => performance.now() - (window.__lastInput || 0) > (slow ? 2000 : 1200) ? setTimeout(res, slow ? 150 : 50) : setTimeout(check, 400);
+    check();
+  });
   categories('live').then(() => list('live')).then(() => liveHome())
-    .then(() => route('/api/rows?type=vod', {})).then(() => route('/api/rows?type=series', {}))
-    .then(() => { for (const t of ['live', 'vod', 'series']) list(t).then(l => searchIndex(t, l)); })
+    .then(quiet).then(() => route('/api/rows?type=vod', {}))
+    .then(quiet).then(() => route('/api/rows?type=series', {}))
+    .then(async () => { for (const t of ['live', 'vod', 'series']) { await quiet(); searchIndex(t, await list(t)); } })
     .catch(() => {});
 }
 
