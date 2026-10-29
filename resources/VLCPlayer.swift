@@ -36,15 +36,26 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
     private let url: URL
     private let titleText: String
     private let start: Double
-    // Ondertitels in Netflix-stijl: wit, iets vet, dunne donkere rand en zachte schaduw, geen balk erachter
+    // Ondertitels in Netflix-stijl: Helvetica, wit, vet, donkere rand en zachte schaduw, geen balk erachter.
+    // Beeld: hardware-decodering en het volledige deblocking-filter (scherper, geen blokjes).
     private let player: VLCMediaPlayer = VLCMediaPlayer(options: [
-        "--freetype-rel-fontsize=16",
+        "--freetype-font=Helvetica Neue",
+        "--freetype-rel-fontsize=14",
         "--freetype-bold",
         "--freetype-color=16777215",
-        "--freetype-outline-thickness=2",
-        "--freetype-outline-opacity=200",
-        "--freetype-shadow-opacity=140",
+        "--freetype-outline-thickness=4",
+        "--freetype-outline-color=0",
+        "--freetype-outline-opacity=230",
+        "--freetype-shadow-opacity=160",
+        "--freetype-shadow-distance=0.04",
         "--freetype-background-opacity=0",
+        "--sub-margin=24",
+        "--avcodec-hw=any",
+        "--avcodec-skiploopfilter=0",
+        "--avcodec-skip-frame=0",
+        "--avcodec-skip-idct=0",
+        "--deinterlace=-1",
+        "--deinterlace-mode=yadif2x",
     ])
     private let subsButton = UIButton(type: .system)
     private var subsApplied = false
@@ -160,7 +171,9 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         controls.addGestureRecognizer(tap2)
 
         let media = VLCMedia(url: url)
-        media.addOption(":network-caching=2000")
+        media.addOption(":network-caching=3000")
+        media.addOption(":clock-jitter=0")
+        media.addOption(":clock-synchro=0")
         if start > 1 { media.addOption(":start-time=\(Int(start))") }
         player.media = media
         player.drawable = videoView
@@ -173,6 +186,33 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
             guard let self = self, !self.everPlayed, !self.finished else { return }
             self.finish(ended: false)
         }
+    }
+
+    // Het hele beeld in de juiste verhouding (zwarte balken waar nodig), nooit uitgerekt of afgesneden
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        fitVideo()
+    }
+
+    private func fitVideo() {
+        let b = view.bounds
+        var size = player.videoSize
+        if let track = (player.media?.tracksInformation as? [[String: Any]])?.first(where: { ($0[VLCMediaTracksInformationType] as? String) == VLCMediaTracksInformationTypeVideo }),
+           let w = (track[VLCMediaTracksInformationVideoWidth] as? NSNumber)?.doubleValue,
+           let h = (track[VLCMediaTracksInformationVideoHeight] as? NSNumber)?.doubleValue, w > 0, h > 0 {
+            // Anamorfe films (bijv. DVD's): pixelverhouding meenemen
+            let num = (track[VLCMediaTracksInformationSourceAspectRatio] as? NSNumber)?.doubleValue ?? 0
+            let den = (track[VLCMediaTracksInformationSourceAspectRatioDenominator] as? NSNumber)?.doubleValue ?? 0
+            size = CGSize(width: w * (num > 0 && den > 0 ? num / den : 1), height: h)
+        }
+        guard size.width > 0, size.height > 0, b.width > 0, b.height > 0 else { videoView.frame = b; return }
+        let scale = min(b.width / size.width, b.height / size.height)
+        let w = (size.width * scale).rounded(), h = (size.height * scale).rounded()
+        let f = CGRect(x: ((b.width - w) / 2).rounded(), y: ((b.height - h) / 2).rounded(), width: w, height: h)
+        guard videoView.frame != f else { return }
+        videoView.frame = f
+        player.videoAspectRatio = nil
+        player.scaleFactor = 0
     }
 
     private func symbolButton(_ name: String, size: CGFloat, action: Selector) -> UIButton {
@@ -234,7 +274,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
     func mediaPlayerStateChanged(_ aNotification: Notification) {
         switch player.state {
         case .buffering, .opening: if !player.isPlaying { spinner.startAnimating() }
-        case .playing: spinner.stopAnimating(); everPlayed = true
+        case .playing: spinner.stopAnimating(); everPlayed = true; fitVideo()
         case .ended: finish(ended: true)
         case .error:
             // Geen melding: de app probeert dan meteen vanzelf een andere versie of bron
@@ -292,6 +332,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
     }
 
     func mediaPlayerTimeChanged(_ aNotification: Notification) {
+        if !everPlayed || videoView.frame == view.bounds { fitVideo() }
         everPlayed = true
         spinner.stopAnimating()
         // Zodra de film loopt zijn de ondertitels bekend: Nederlands aan (of je eigen keuze), andere talen nooit

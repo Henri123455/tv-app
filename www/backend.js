@@ -119,7 +119,7 @@ const chanKey = s => { const k = channelName(s).toUpperCase().replace(/[^A-Z0-9+
 // Taallabel uit de titel: "[NL] Wonder (2017)" → NL, "[NL : NETFLIX ] …" → NL
 const langTag = s => (String(s || '').match(/^\s*\[\s*([A-Z]{2,4})\b/) || [])[1] || '';
 // Zelfde film/serie in een andere versie (punt erachter, HQ, ander taallabel) → zelfde sleutel
-const titleKey = n => fold(n).replace(/\[[^\]]*\]/g, '').replace(/\b(hq|qhd|4k|uhd|fhd|nl gesproken|dubbed)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const titleKey = n => fold(n).replace(/\[[^\]]*\]/g, '').replace(/\b(hq|qhd|4k|uhd|fhd|nl gesproken|dubbed|cam versie|hdcam|cam|telesync|hdts)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
 async function categories(type) {
   const action = { live: 'get_live_categories', vod: 'get_vod_categories', series: 'get_series_categories' }[type];
@@ -203,8 +203,10 @@ async function nlCatSet(type) {
   const cats = await categories(type);
   return memo(cats, 'nlset', () => new Set(cats.filter(c => c.code === 'NL').map(c => c.id)));
 }
+// Bioscoop-opnames (CAM) alleen als er geen normale versie is
+const isCam = x => /\b(HD)?CAM\b|TELESYNC|\bHDTS\b/i.test(x.n || '');
 function bestVersion(versions, nlSet) {
-  const score = x => (nlSet.has(x.c) ? 8 : 0) + (x.lg === 'NL' ? 4 : x.lg === 'ALL' || !x.lg ? 1 : 0) + (x.hq ? 1 : 0) + (x.i ? 1 : 0);
+  const score = x => (isCam(x) ? -50 : 0) + (nlSet.has(x.c) ? 8 : 0) + (x.lg === 'NL' ? 4 : x.lg === 'ALL' || !x.lg ? 1 : 0) + (x.hq ? 1 : 0) + (x.i ? 1 : 0);
   return versions.reduce((a, b) => score(b) > score(a) ? b : a);
 }
 function dedupe(items, nlSet) {
@@ -214,7 +216,7 @@ function dedupe(items, nlSet) {
     const best = bestVersion(v, nlSet);
     if (v.length < 2) return best;
     // De andere versies onthouden: werkt de beste even niet (bijv. een kapotte HQ-server), dan neemt de app de volgende
-    const rest = v.filter(x => x !== best).sort((a, b) => (nlSet.has(b.c) - nlSet.has(a.c)) || ((b.lg === 'NL') - (a.lg === 'NL')));
+    const rest = v.filter(x => x !== best).sort((a, b) => (isCam(a) - isCam(b)) || (nlSet.has(b.c) - nlSet.has(a.c)) || ((b.lg === 'NL') - (a.lg === 'NL')));
     return { ...best, alt: rest.slice(0, 4).map(x => ({ id: x.id, e: x.e })) };
   });
 }
@@ -779,7 +781,7 @@ async function route(url, init) {
     const nlSet = await nlCatSet(type);
     return [].concat(...parts)
       .filter(x => titleKey(x.n) === key && String(x.id) !== String(q.id))
-      .sort((a, b) => (nlSet.has(b.c) - nlSet.has(a.c)) || ((a.hq ? 1 : 0) - (b.hq ? 1 : 0)))
+      .sort((a, b) => (isCam(a) - isCam(b)) || (nlSet.has(b.c) - nlSet.has(a.c)) || ((a.hq ? 1 : 0) - (b.hq ? 1 : 0)))
       .slice(0, 6).map(x => ({ id: x.id, e: x.e, hq: x.hq }));
   }
   if (p === '/api/view' && method === 'POST') { const b = body(); if (/^(live|vod|series):\d+$/.test(b.k)) addView(b.k, b.item); return { ok: true }; }

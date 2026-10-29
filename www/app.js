@@ -428,7 +428,11 @@ function heroCarousel(hero, slides) {
     glow(slides[cur]);
     slides[cur].onShow?.(els[cur]);
   };
-  const auto = () => { clearInterval(timer); if (slides.length > 1) timer = setInterval(() => { if (!document.hidden && hero.isConnected && !hero.closest('[hidden]')) show(cur + 1); }, 7000); };
+  const auto = () => { clearInterval(timer); if (slides.length > 1) timer = setInterval(() => {
+    // Niet wisselen tijdens het scrollen of als de banner uit beeld is: dat gaf haperingen op de iPhone
+    if (document.hidden || !hero.isConnected || hero.closest('[hidden]') || performance.now() - lastScroll < 1500 || hero.getBoundingClientRect().bottom < 0) return;
+    show(cur + 1);
+  }, 7000); };
   dots.forEach(d => d.onclick = () => { show(+d.dataset.i); auto(); });
   let x0 = null;
   hero.addEventListener('pointerdown', e => { x0 = e.clientX; });
@@ -1456,7 +1460,13 @@ $('#loginForm').onsubmit = async e => {
 
 // ================= Start =================
 $$('.nav-pill button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
-addEventListener('scroll', () => $('#nav').classList.toggle('scrolled', scrollY > 10), { passive: true });
+let lastScroll = 0, navScrolled = false;
+document.addEventListener('scroll', e => {
+  lastScroll = performance.now();
+  if (e.target !== document) return;
+  const s = scrollY > 10;
+  if (s !== navScrolled) { navScrolled = s; $('#nav').classList.toggle('scrolled', s); }
+}, { passive: true, capture: true });
 
 function startApp() {
   hideAll();
