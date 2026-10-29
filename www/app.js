@@ -285,7 +285,8 @@ const prefetchFrom = e => {
 document.addEventListener('pointerover', prefetchFrom, { passive: true });
 document.addEventListener('touchstart', prefetchFrom, { passive: true });
 
-const CHUNK = 30;
+// Op de iPhone kleinere happen per rij: minder werk tegelijk tijdens snel scrollen
+const CHUNK = matchMedia('(hover: none) and (pointer: coarse)').matches ? 12 : 30;
 function fillShelf(shelf, type, list, opt = {}) { // list/opt worden bijgewerkt als de hele rij binnenkomt
   shelf.innerHTML = '';
   shelf._list = list; shelf._type = type;

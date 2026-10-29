@@ -49,7 +49,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         "--freetype-shadow-opacity=160",
         "--freetype-shadow-distance=0.04",
         "--freetype-background-opacity=0",
-        "--sub-margin=24",
+        "--sub-margin=4",
         "--avcodec-hw=any",
         "--avcodec-skiploopfilter=0",
         "--avcodec-skip-frame=0",
@@ -172,8 +172,6 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
 
         let media = VLCMedia(url: url)
         media.addOption(":network-caching=3000")
-        media.addOption(":clock-jitter=0")
-        media.addOption(":clock-synchro=0")
         if start > 1 { media.addOption(":start-time=\(Int(start))") }
         player.media = media
         player.drawable = videoView
@@ -289,15 +287,23 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
     private func subtitleChoices() -> [(name: String, index: Int32, lang: String)] {
         guard let names = player.videoSubTitlesNames as? [String],
               let indexes = player.videoSubTitlesIndexes as? [NSNumber] else { return [] }
-        var out: [(name: String, index: Int32, lang: String)] = []
+        // Per taal de volledige ondertitel kiezen: niet de "forced"-variant (alleen buitenlandse stukjes)
+        // en liefst niet de doven/slechthorenden-versie met [geluiden] ertussen
+        var best: [String: (score: Int, index: Int32)] = [:]
         for (n, i) in zip(names, indexes) where i.int32Value >= 0 {
             let l = n.lowercased()
-            let isNL = l.contains("dut") || l.contains("nld") || l.contains("dutch") || l.contains("nederlands") || l.range(of: "\\bnl\\b", options: .regularExpression) != nil
+            let isNL = l.contains("dut") || l.contains("nld") || l.contains("dutch") || l.contains("nederlands") || l.contains("vlaams") || l.range(of: "\\bnl\\b", options: .regularExpression) != nil
             let isEN = !isNL && (l.contains("eng") || l.range(of: "\\ben\\b", options: .regularExpression) != nil)
             let lang = isNL ? "nl" : (isEN ? "en" : "")
-            if lang.isEmpty || out.contains(where: { $0.lang == lang }) { continue }
-            out.append((name: lang == "nl" ? "Nederlands" : "English", index: i.int32Value, lang: lang))
+            if lang.isEmpty { continue }
+            var score = 0
+            if l.contains("forced") || l.contains("geforceerd") || l.contains("signs") { score -= 10 }
+            if l.contains("sdh") || l.contains("hearing") || l.contains("cc") || l.contains("doven") { score -= 2 }
+            if l.contains("full") || l.contains("volledig") { score += 1 }
+            if let b = best[lang], b.score >= score { continue }
+            best[lang] = (score, i.int32Value)
         }
+        let out = best.map { (name: $0.key == "nl" ? "Nederlands" : "English", index: $0.value.index, lang: $0.key) }
         return out.sorted { $0.lang == "nl" && $1.lang != "nl" }
     }
 

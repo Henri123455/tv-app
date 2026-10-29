@@ -354,7 +354,7 @@ function mergeChannels(entries) {
 
 async function liveHome() {
   const [all, cats] = await Promise.all([list('live'), categories('live')]);
-  return memo(all, 'home', () => {
+  return memo(all, 'home:' + viewsVersion, () => {
     const catById = new Map(cats.map(c => [c.id, c]));
     const nl = all.map(x => ({ x, cat: catById.get(x.c) })).filter(e => e.cat && e.cat.code === 'NL');
     const merged = mergeChannels(nl);
@@ -370,7 +370,9 @@ async function liveHome() {
       const ia = MAIN_ORDER.indexOf(chanKey(a.n)), ib = MAIN_ORDER.indexOf(chanKey(b.n));
       return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || natural(a, b);
     });
-    for (const [t, l] of rows) if (t !== 'Nederlandse zenders') l.sort(natural);
+    // Binnen een kopje (ESPN, Ziggo Sport …): de nu meest bekeken zenders eerst
+    const watched = x => viewTrend('live:' + x.id) + (x.alt || []).reduce((s, id) => s + viewTrend('live:' + id), 0);
+    for (const [t, l] of rows) if (t !== 'Nederlandse zenders') l.sort((a, b) => watched(b) - watched(a) || natural(a, b));
     const countries = new Map();
     for (const c of cats) if (c.code !== 'NL' && c.code !== 'OVERIG') countries.set(c.code, (countries.get(c.code) || 0) + 1);
     return {

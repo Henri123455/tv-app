@@ -628,3 +628,47 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
   .card .art img { transition: none; }
   .shelf { scroll-snap-type: none; will-change: scroll-position; }
 }
+
+/* ---------- Snel wisselen tussen Live/Films/Series: verborgen pagina's blijven opgebouwd (geen nieuwe opmaak bij terugkomen) ---------- */
+.page[hidden] { display: block !important; content-visibility: hidden; visibility: hidden; pointer-events: none; position: absolute; top: 0; left: 0; right: 0; height: 0; overflow: hidden; }
+.row { contain: layout style; }
+.shelf { contain: layout paint style; }
+.card { contain: layout style; }
+
+/* ---------- Zenders per kopje (ESPN, Ziggo Sport …): op de telefoon minstens twee naast elkaar ---------- */
+@media (max-width: 760px) {
+  .grid.live { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 12px; }
+  .grid.posters { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 10px; }
+}
+@media (max-width: 760px) and (orientation: landscape) {
+  .grid.live { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .grid.posters { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+
+/* ---------- Liquid Glass overal, ook op de iPhone (zonder live-vervaging: glans, rand en licht in het glas zelf) ---------- */
+:root { --lg-solid: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.05) 50%, rgba(255,255,255,.09)); }
+.chip, .seg, .all-btn, .group, .ep, .prog, .who-list .profile, .sheet-card, .p-side, .toast, .offline, .field-group, .account .card-box {
+  box-shadow: var(--lg-edge); }
+.chip:not(.ghost), .seg, .all-btn, .group { background: var(--lg-solid), rgba(255,255,255,.04); }
+.card .art { box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+.card .art::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 1;
+  background: linear-gradient(155deg, rgba(255,255,255,.16), rgba(255,255,255,0) 32%); box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 0 0 1px rgba(255,255,255,.07); }
+.row-title h3, .section-title, .page-title { letter-spacing: -.02em; }
+.btn.primary { box-shadow: inset 0 1px 0 rgba(255,255,255,.6), 0 6px 20px rgba(0,0,0,.35); }
+@media (hover: none) and (pointer: coarse) {
+  .nav-pill { background: linear-gradient(180deg, rgba(58,58,64,.94), rgba(22,22,26,.97)); box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 0 0 .5px rgba(255,255,255,.1); }
+  .nav-pill button.active svg { filter: drop-shadow(0 0 8px rgba(255,255,255,.35)); }
+  .btn.glass, .round { backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--lg-solid), rgba(60,60,66,.72); box-shadow: var(--lg-edge); }
+  .btn.glass::after, .round::after { display: block; opacity: .45; }
+  .sheet-card { background: linear-gradient(180deg, #232327, #161618 260px); box-shadow: inset 0 1px 0 rgba(255,255,255,.16); }
+  .chips-bar { background: linear-gradient(180deg, rgba(20,20,24,.97), rgba(10,10,12,.93)); box-shadow: inset 0 -.5px 0 rgba(255,255,255,.1); }
+  .nav-account .avatar { box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 4px 14px rgba(0,0,0,.4); }
+}
+[data-theme="light"] .chip:not(.ghost), [data-theme="light"] .seg, [data-theme="light"] .group { background: linear-gradient(180deg, #fff, rgba(255,255,255,.7)); box-shadow: inset 0 1px 0 #fff, 0 0 0 .5px rgba(0,0,0,.08), 0 2px 8px rgba(0,0,0,.05); }
+[data-theme="light"] .card .art::before { background: linear-gradient(155deg, rgba(255,255,255,.3), rgba(255,255,255,0) 32%); }
+@media (hover: none) and (pointer: coarse) {
+  [data-theme="light"] .nav-pill { background: linear-gradient(180deg, rgba(255,255,255,.97), rgba(242,242,246,.97)); box-shadow: inset 0 .5px 0 rgba(0,0,0,.12); }
+  [data-theme="light"] .btn.glass, [data-theme="light"] .round { background: linear-gradient(180deg, rgba(255,255,255,.95), rgba(240,240,244,.85)); box-shadow: inset 0 1px 0 #fff, 0 0 0 .5px rgba(0,0,0,.1), 0 4px 12px rgba(0,0,0,.08); color: #1d1d1f; }
+  [data-theme="light"] .sheet-card { background: #fff; }
+  [data-theme="light"] .chips-bar { background: rgba(245,245,247,.97); }
+}
