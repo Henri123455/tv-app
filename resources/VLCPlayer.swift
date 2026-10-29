@@ -179,8 +179,8 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         spinner.startAnimating()
         player.play()
         scheduleHide()
-        // Na 20 seconden nog steeds geen beeld? Dan is deze bron kapot: sluiten zodat de app de volgende probeert
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+        // Na 10 seconden nog steeds geen beeld? Dan is deze bron kapot: sluiten zodat de app de volgende probeert
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             guard let self = self, !self.everPlayed, !self.finished else { return }
             self.finish(ended: false)
         }
