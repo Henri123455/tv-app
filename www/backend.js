@@ -174,27 +174,21 @@ async function loadNetflixNL() {
   const saved = readJSON(NF_FILE, null);
   if (saved) useNetflix(saved);
   if (saved && Date.now() - saved.t < 24 * 3600e3) return;
+  // Elke dag klaargezet door GitHub (Netflix Top 10 NL + wat deze week trending is in Nederland, zie tv-iphone-app)
   try {
-    const r = await fetch('https://www.netflix.com/tudum/top10/data/all-weeks-countries.tsv', { signal: AbortSignal.timeout(120000) });
+    const r = await fetch('https://raw.githubusercontent.com/Henri123455/tv-app/main/data/netflix-nl.json?t=' + Date.now(), { signal: AbortSignal.timeout(60000) });
     if (!r.ok) return;
-    const rows = (await r.text()).split('\n').filter(l => l.startsWith('Netherlands\tNL\t')).map(l => l.split('\t'));
-    const latest = rows.reduce((m, x) => x[2] > m ? x[2] : m, '');
-    const films = new Map(), tv = new Map();
-    for (const [, , week, catg, rank, title] of rows) {
-      const ageWeeks = (Date.parse(latest) - Date.parse(week)) / (7 * 864e5);
-      if (ageWeeks > 26) continue;
-      const m = catg === 'Films' ? films : tv, k = popKey(title);
-      m.set(k, (m.get(k) || 0) + (11 - Number(rank)) * Math.pow(0.5, ageWeeks / 3));
-    }
-    const d = { t: Date.now(), week: latest, films: [...films], tv: [...tv] };
+    const d = await r.json();
+    if (saved && saved.t === d.t) return;
     writeJSON(NF_FILE, d); useNetflix(d);
-    console.log(`Netflix Top 10 Nederland bijgewerkt (week ${latest})`);
+    console.log(`Populair in Nederland bijgewerkt (${d.day || d.week})`);
   } catch {}
 }
 function popScore(type, x) {
   const n = (type === 'vod' ? nf.films : nf.tv).get(popKey(x.n)) || 0;
   const v = viewTrend(`${type}:${x.id}`);
   const ageDays = x.a ? (Date.now() / 1000 - x.a) / 86400 : 999;
+  // Wat Nederland deze week kijkt telt het zwaarst, daarna wat er in deze app bekeken wordt
   return n * 100 + v * 60 + (x.r || 0) * 3 + Math.max(0, 90 - ageDays) / 90 * 25;
 }
 
@@ -221,6 +215,17 @@ function dedupe(items, nlSet) {
   });
 }
 // Alle Nederlandse titels, één versie elk, populairste eerst
+// Alle versies van één titel voor de knop "Bron": de beste (die de app al koos) eerst, dan Nederlands, CAM als laatste
+async function versionsOf(type, id, name, items) {
+  const key = titleKey(name || ''), nlSet = await nlCatSet(type);
+  const cats = new Map((await categories(type)).map(c => [c.id, c]));
+  const seen = new Set();
+  const score = x => (String(x.id) === String(id) ? 1000 : 0) + (isCam(x) ? -50 : 0) + (nlSet.has(x.c) ? 8 : 0) + (x.lg === 'NL' ? 4 : 0) + (x.hq ? 1 : 0);
+  return items.filter(x => titleKey(x.n) === key && !seen.has(String(x.id)) && seen.add(String(x.id)))
+    .sort((a, b) => score(b) - score(a)).slice(0, 12)
+    .map(x => ({ id: x.id, e: x.e, cat: cats.get(x.c)?.name || '', ...(x.hq ? { hq: 1 } : {}), ...(isCam(x) ? { cam: 1 } : {}), ...(nlSet.has(x.c) || x.lg === 'NL' ? { nl: 1 } : {}) }));
+}
+
 async function nlPool(type) {
   const [all, nlSet] = await Promise.all([list(type), nlCatSet(type)]);
   return memo(all, 'nlpool:' + nf.v + ':' + viewsVersion, () => dedupe(all.filter(x => nlSet.has(x.c)), nlSet).sort((a, b) => popScore(type, b) - popScore(type, a)));
@@ -785,6 +790,12 @@ async function route(url, init) {
       .filter(x => titleKey(x.n) === key && String(x.id) !== String(q.id))
       .sort((a, b) => (isCam(a) - isCam(b)) || (nlSet.has(b.c) - nlSet.has(a.c)) || ((a.hq ? 1 : 0) - (b.hq ? 1 : 0)))
       .slice(0, 6).map(x => ({ id: x.id, e: x.e, hq: x.hq }));
+  }
+  if (p === '/api/versions') {
+    const type = q.type === 'series' ? 'series' : 'vod';
+    const cats = await categories(type);
+    const parts = await Promise.all(cats.filter(c => c.code === 'NL' || c.code === 'ALL').map(c => fetchList(type, c.id).catch(() => [])));
+    return versionsOf(type, q.id, q.name, [].concat(...parts));
   }
   if (p === '/api/view' && method === 'POST') { const b = body(); if (/^(live|vod|series):\d+$/.test(b.k)) addView(b.k, b.item); return { ok: true }; }
   if (p === '/api/codec') return { codec: '' };

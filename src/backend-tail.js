@@ -185,6 +185,12 @@ async function route(url, init) {
       .sort((a, b) => (isCam(a) - isCam(b)) || (nlSet.has(b.c) - nlSet.has(a.c)) || ((a.hq ? 1 : 0) - (b.hq ? 1 : 0)))
       .slice(0, 6).map(x => ({ id: x.id, e: x.e, hq: x.hq }));
   }
+  if (p === '/api/versions') {
+    const type = q.type === 'series' ? 'series' : 'vod';
+    const cats = await categories(type);
+    const parts = await Promise.all(cats.filter(c => c.code === 'NL' || c.code === 'ALL').map(c => fetchList(type, c.id).catch(() => [])));
+    return versionsOf(type, q.id, q.name, [].concat(...parts));
+  }
   if (p === '/api/view' && method === 'POST') { const b = body(); if (/^(live|vod|series):\d+$/.test(b.k)) addView(b.k, b.item); return { ok: true }; }
   if (p === '/api/codec') return { codec: '' };
   if (p === '/api/top') return top10(['live', 'vod', 'series'].includes(q.type) ? q.type : 'live');

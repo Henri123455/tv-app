@@ -882,6 +882,30 @@ function showSheet(html) {
 function hideSheet() { $('#sheet').hidden = true; document.body.style.overflow = ''; }
 $('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet' || e.target.closest('[data-close]')) closeTop(); });
 
+// Knop "Bron": andere versies van dezelfde film/serie, pas geladen als je erop tikt (beste en Nederlands eerst)
+const SOURCE_ICON = '<svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>';
+function sourceButton(type, it, current, onPick) {
+  const btn = $('#mSource'), box = $('#sheetCard .versions');
+  if (!btn || !box) return;
+  let loaded = null;
+  btn.onclick = async () => {
+    if (!box.hidden) { box.hidden = true; return; }
+    box.hidden = false;
+    if (!loaded) {
+      box.innerHTML = '<p class="muted">Versies zoeken…</p>';
+      loaded = api(`/api/versions?type=${type}&id=${encodeURIComponent(it.id)}&name=${encodeURIComponent(it.n)}`).catch(() => []);
+    }
+    let list = await loaded;
+    if (!list.some(v => String(v.id) === String(it.id))) list = [{ id: it.id, e: it.e, hq: it.hq }, ...list];
+    const cur = current();
+    box.innerHTML = `<h4>Kies een bron</h4>` + list.map((v, n) => {
+      const tags = [n === 0 ? 'Beste' : '', v.nl ? 'Nederlands' : '', v.hq ? 'HQ' : '', v.cam ? 'CAM' : '', type === 'vod' && v.e ? String(v.e).toUpperCase() : ''].filter(Boolean);
+      return `<button class="version ${String(v.id) === String(cur) ? 'on' : ''}" data-v="${n}"><b>Bron ${n + 1}</b><span>${esc(tidyCat(v.cat || '') || (n === 0 ? 'Gekozen door de app' : 'Andere versie'))}</span><small>${tags.map(esc).join(' · ')}</small></button>`;
+    }).join('') + (list.length < 2 ? '<p class="muted">Geen andere versies gevonden.</p>' : '');
+    $$('.version', box).forEach(b => b.onclick = () => { box.hidden = true; const v = list[+b.dataset.v]; onPick(v, list.filter(x => x !== v)); });
+  };
+}
+
 async function openMovie(it) {
   const k = favKey('vod', it.id);
   showSheet(`<div class="sheet-hero"><div><h2>${esc(tidyName(it.n))}</h2></div></div><div class="sheet-body"><p class="muted">Laden…</p></div>`);
@@ -904,21 +928,25 @@ async function openMovie(it) {
         <button class="btn primary" id="mPlay">${PLAY_ICON}${resume ? 'Verder vanaf ' + fmtTime(resume) : 'Afspelen'}</button>
         ${resume ? '<button class="btn glass" id="mRestart">Vanaf begin</button>' : ''}
         <button class="btn glass ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}">${HEART}Mijn lijst</button>
+        <button class="round" id="mSource" title="Andere bron">${SOURCE_ICON}</button>
       </div>
+      <div class="versions" hidden></div>
       ${i.plot || i.description ? `<p class="plot">${esc(i.plot || i.description)}</p>` : ''}
       <div class="credits">${i.cast ? `<div><b>Met</b> ${esc(i.cast)}</div>` : ''}${i.director ? `<div><b>Regie</b> ${esc(i.director)}</div>` : ''}</div>
     </div>`;
   heroArt($('#sheetCard .sheet-hero'), backdrops, it.i || i.movie_image || i.cover_big, 700);
-  const go = start => playVod({ kind: 'movie', id: it.id, ext, start, duration: dur, title: tidyName(i.name || it.n), sub: (i.releasedate || '').slice(0, 4), favKey: k, item: it, hist: { k, type: 'vod', id: it.id, n: it.n, i: it.i } });
+  const go = (start, v, rest) => playVod({ kind: 'movie', id: v ? v.id : it.id, ext: v ? v.e || 'mp4' : ext, start, duration: dur, title: tidyName(i.name || it.n), sub: (i.releasedate || '').slice(0, 4), favKey: k,
+    item: v ? { ...it, hq: v.hq, alt: rest.map(x => ({ id: x.id, e: x.e })) } : it, hist: { k, type: 'vod', id: it.id, n: it.n, i: it.i } });
   $('#mPlay').onclick = () => go(resume);
   $('#mRestart') && ($('#mRestart').onclick = () => go(0));
+  sourceButton('vod', it, () => it.id, (v, rest) => go(resume, v, rest));
 }
 
-async function openSeries(it) {
+async function openSeries(it, src) { // src: een andere versie van de serie (via de knop "Bron")
   const k = favKey('series', it.id);
   showSheet(`<div class="sheet-hero"><div><h2>${esc(tidyName(it.n))}</h2></div></div><div class="sheet-body"><p class="muted">Laden…</p></div>`);
   let info = {};
-  try { info = await getInfo('series', it.id); } catch {}
+  try { info = await getInfo('series', src ? src.id : it.id); } catch {}
   const raw = Array.isArray(info.info) ? {} : info.info || {};
   const i = metaMatches(it.n, raw) ? raw : {};
   const eps = info.episodes || {};
@@ -932,11 +960,15 @@ async function openSeries(it) {
       <div class="hero-actions">
         ${h?.ep ? `<button class="btn primary" id="sResume">${PLAY_ICON}Verder: S${h.ep.season} A${h.ep.num}</button>` : seasons.length ? `<button class="btn primary" id="sFirst">${PLAY_ICON}Afspelen</button>` : ''}
         <button class="btn glass ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}">${HEART}Mijn lijst</button>
+        <button class="round" id="mSource" title="Andere bron">${SOURCE_ICON}</button>
       </div>
+      <div class="versions" hidden></div>
       ${i.plot ? `<p class="plot">${esc(i.plot)}</p>` : ''}
       ${seasons.length ? `<div class="seasons">${seasons.map(s => `<button class="chip" data-season="${esc(s)}">Seizoen ${esc(s)}</button>`).join('')}</div><div class="episodes"></div>` : '<p class="muted">Geen afleveringen gevonden.</p>'}
     </div>`;
   heroArt($('#sheetCard .sheet-hero'), backdrops, it.i || i.cover, 700);
+  sourceButton('series', it, () => src ? src.id : it.id, (v, rest) =>
+    openSeries({ ...it, alt: rest.map(x => ({ id: x.id, e: x.e })) }, String(v.id) === String(it.id) ? null : v));
   const flat = seasons.flatMap(s => eps[s].map(e => ({ ...e, season: s })));
   const playEp = (e, start = 0) => {
     const idx = flat.indexOf(e);
