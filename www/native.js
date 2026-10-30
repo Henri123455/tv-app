@@ -14,12 +14,13 @@ const src = (kind, id, ext) => { const d = window.TVBackend.direct(); return `${
 const APPLE_EXT = /^(mp4|m4v|mov|m3u8)$/i;
 
 let cur = null;
-const done = (pos, ended) => { const c = cur; cur = null; if (!c) return; if (ended) c.ended?.(); else c.exit?.(pos); };
+const done = (pos, ended, dur) => { const c = cur; cur = null; if (!c) return; if (ended) c.ended?.(); else c.exit?.(pos, dur); };
 AV?.addListener('jeepCapVideoPlayerReady', () => { if (cur?.start > 5) AV.setCurrentTime({ playerId: 'fullscreen', seektime: cur.start }).catch(() => {}); });
 AV?.addListener('jeepCapVideoPlayerExit', d => done(Number(d?.currentTime) || 0, false));
 AV?.addListener('jeepCapVideoPlayerEnded', () => done(0, true));
-VLC?.addListener('exit', d => done(Number(d?.currentTime) || 0, false));
+VLC?.addListener('exit', d => done(Number(d?.currentTime) || 0, false, Number(d?.duration) || 0));
 VLC?.addListener('ended', () => done(0, true));
+VLC?.addListener('progress', d => cur?.progress?.(Number(d?.currentTime) || 0, Number(d?.duration) || 0));
 
 async function withVLC(o) {
   cur = o;
@@ -29,7 +30,7 @@ async function withVLC(o) {
 async function withApple(o) {
   const t0 = Date.now();
   // Meteen weer dicht zonder beeld? Dan was dit formaat niets voor Apple's speler: VLC proberen
-  cur = { ...o, exit: pos => { if (VLC && pos < 0.5 && Date.now() - t0 < 20000) { withVLC(o); } else o.exit?.(pos); } };
+  cur = { ...o, exit: (pos, dur) => { if (VLC && pos < 0.5 && Date.now() - t0 < 20000) { withVLC(o); } else o.exit?.(pos, dur); } };
   try {
     const r = await AV.initPlayer({
       mode: 'fullscreen', playerId: 'fullscreen', componentTag: 'div', url: o.url,
@@ -127,12 +128,15 @@ playVod = function (o) {
     if (!s.url && !s.forced && !(await alive(url))) { s.dead = true; return tryIdx(i + 1); }
     if (i > 0) toast('Andere versie geprobeerd');
     const t0 = Date.now();
+    let played = false;
     play({
       url, title: o.title, sub: o.sub || '', start: o.start || 0,
-      exit: pos => {
-        if (pos < 0.5 && Date.now() - t0 < 45000) return tryIdx(i + 1);
-        if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: o.duration || 0 });
+      exit: (pos, dur) => {
+        if (pos < 0.5 && Date.now() - t0 < 45000 && !played) return tryIdx(i + 1);
+        if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || o.duration || 0 });
       },
+      // Tussendoor bewaren (elke 10 s): ook als de app wordt afgesloten of de telefoon uitvalt, weet hij waar je was
+      progress: (pos, dur) => { played = true; if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || o.duration || 0 }); },
       ended: () => { if (o.hist) saveHist({ ...o.hist, pos: o.duration || 0, dur: o.duration || 0 }); if (o.next) setTimeout(o.next, 600); },
     }, !s.url && (!APPLE_EXT.test(s.e || '') || s.hq));
   };

@@ -1044,7 +1044,12 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
   $$('[data-season]').forEach(b => b.onclick = () => showSeason(b.dataset.season));
   if (seasons.length) showSeason(h?.ep && eps[h.ep.season] ? String(h.ep.season) : seasons[0]);
   $('#sFirst') && ($('#sFirst').onclick = () => playEp(flat[0]));
-  $('#sResume') && ($('#sResume').onclick = () => { const e = flat.find(x => x.id == h.ep.id) || flat[0]; playEp(e, h.pos > 30 ? h.pos : 0); });
+  // Verder kijken: midden in een aflevering gestopt = daar verder; aflevering (bijna) af = de volgende vanaf het begin
+  $('#sResume') && ($('#sResume').onclick = () => {
+    const idx = Math.max(0, flat.findIndex(x => x.id == h.ep.id)), e = flat[idx] || flat[0];
+    const done = h.dur > 0 && h.pos > h.dur - 120;
+    if (done && flat[idx + 1]) playEp(flat[idx + 1], 0); else playEp(e, !done && h.pos > 30 ? h.pos : 0);
+  });
 }
 
 // ================= Speler =================

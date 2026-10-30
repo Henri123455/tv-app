@@ -20,8 +20,12 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         let start = call.getDouble("start") ?? 0
         DispatchQueue.main.async {
             let vc = VLCPlayerViewController(url: url, title: title, start: start)
-            vc.onExit = { [weak self] seconds, ended in
-                self?.notifyListeners(ended ? "ended" : "exit", data: ["currentTime": seconds])
+            vc.onExit = { [weak self] seconds, ended, length in
+                self?.notifyListeners(ended ? "ended" : "exit", data: ["currentTime": seconds, "duration": length])
+            }
+            // Elke 10 seconden doorgeven waar je bent: zo blijft "verder kijken" kloppen, ook als de app wordt afgesloten
+            vc.onProgress = { [weak self] seconds, length in
+                self?.notifyListeners("progress", data: ["currentTime": seconds, "duration": length])
             }
             vc.modalPresentationStyle = .fullScreen
             self.bridge?.viewController?.present(vc, animated: true)
@@ -31,23 +35,31 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
 }
 
 final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
-    var onExit: ((Double, Bool) -> Void)?
+    var onExit: ((Double, Bool, Double) -> Void)?
+    var onProgress: ((Double, Double) -> Void)?
+    private var lastProgress: Double = 0
+    private var startChecked = false
+    private var length: Double { Double(player.media?.length.intValue ?? 0) / 1000 }
 
     private let url: URL
     private let titleText: String
     private let start: Double
-    // Ondertitels in Netflix-stijl: Helvetica, wit, vet, donkere rand en zachte schaduw, geen balk erachter.
+    // Ondertitels zoals Netflix/UHF: groot, wit en vet, met een stevige zwarte rand en schaduw (leesbaar op elk beeld),
+    // geen balk erachter.
     // Beeld: hardware-decodering en het volledige deblocking-filter (scherper, geen blokjes).
     private let player: VLCMediaPlayer = VLCMediaPlayer(options: [
         "--freetype-font=Helvetica Neue",
-        "--freetype-rel-fontsize=14",
+        "--freetype-rel-fontsize=12",
         "--freetype-bold",
         "--freetype-color=16777215",
-        "--freetype-outline-thickness=4",
+        "--freetype-opacity=255",
+        "--freetype-outline-thickness=6",
         "--freetype-outline-color=0",
-        "--freetype-outline-opacity=230",
-        "--freetype-shadow-opacity=160",
-        "--freetype-shadow-distance=0.04",
+        "--freetype-outline-opacity=255",
+        "--freetype-shadow-color=0",
+        "--freetype-shadow-opacity=220",
+        "--freetype-shadow-angle=-90",
+        "--freetype-shadow-distance=0.05",
         "--freetype-background-opacity=0",
         "--sub-margin=4",
         "--avcodec-hw=any",
@@ -303,11 +315,12 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         finished = true
         hideTimer?.invalidate()
         let t = everPlayed ? seconds : 0
+        let len = length
         player.stop()
         let back = presentingViewController
         dismiss(animated: true) { [weak self] in
             MainViewController.backToPortrait(back)
-            self?.onExit?(t, ended)
+            self?.onExit?(t, ended, len)
         }
     }
 
@@ -315,7 +328,9 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         switch player.state {
         case .buffering, .opening: if !player.isPlaying { spinner.startAnimating() }
         case .playing: spinner.stopAnimating(); everPlayed = true; fitVideo()
-        case .ended: finish(ended: true)
+        case .ended:
+            // Alleen echt "afgelopen" als we bij het einde zijn; valt de stream halverwege weg, dan onthouden waar je was
+            finish(ended: length <= 0 || seconds >= length - 120)
         case .error:
             // Geen melding: de app probeert dan meteen vanzelf een andere versie of bron
             finish(ended: false)
@@ -381,10 +396,16 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
 
     func mediaPlayerTimeChanged(_ aNotification: Notification) {
         if !everPlayed || videoView.frame == view.bounds { fitVideo() }
+        // Verder kijken: sommige streams negeren de starttijd, dan zelf naar die plek springen
+        if !startChecked && seconds > 0.5 {
+            startChecked = true
+            if start > 30 && seconds < start - 10 { player.time = VLCTime(int: Int32(start * 1000)) }
+        }
         everPlayed = true
         spinner.stopAnimating()
         // Zodra de film loopt zijn de ondertitels bekend: Nederlands aan (of je eigen keuze), andere talen nooit
         if !subsApplied && player.time.intValue > 800 { subsApplied = true; applySubtitles() }
+        if abs(seconds - lastProgress) >= 10 { lastProgress = seconds; onProgress?(seconds, length) }
         if seeking { return }
         slider.value = player.position
         let len = Double(player.media?.length.intValue ?? 0) / 1000
