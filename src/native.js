@@ -20,10 +20,12 @@ AV?.addListener('jeepCapVideoPlayerExit', d => done(Number(d?.currentTime) || 0,
 AV?.addListener('jeepCapVideoPlayerEnded', () => done(0, true));
 VLC?.addListener('exit', d => done(Number(d?.currentTime) || 0, false, Number(d?.duration) || 0));
 VLC?.addListener('ended', () => done(0, true));
+VLC?.addListener('airplay', d => { const c = cur; cur = null; c?.airplay?.(Number(d?.currentTime) || 0); });
 VLC?.addListener('progress', d => cur?.progress?.(Number(d?.currentTime) || 0, Number(d?.duration) || 0));
 
 async function withVLC(o) {
-  cur = o;
+  // Naar de tv (AirPlay) gekozen in de speler: verder in Apple's speler op dezelfde plek, die stuurt het beeld door
+  cur = { ...o, airplay: pos => AV ? withApple({ ...o, start: pos > 5 ? pos : o.start || 0 }) : null };
   try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0 }); }
   catch { cur = null; toast('Afspelen lukt niet'); }
 }

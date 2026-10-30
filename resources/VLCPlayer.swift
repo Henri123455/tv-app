@@ -1,5 +1,6 @@
 import UIKit
 import AVFoundation
+import AVKit
 import Capacitor
 import MobileVLCKit
 
@@ -27,6 +28,10 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             vc.onProgress = { [weak self] seconds, length in
                 self?.notifyListeners("progress", data: ["currentTime": seconds, "duration": length])
             }
+            // AirPlay gekozen: VLC kan geen beeld naar de tv sturen, dus de app gaat verder in Apple's speler (die dat wel kan)
+            vc.onAirPlay = { [weak self] seconds in
+                self?.notifyListeners("airplay", data: ["currentTime": seconds])
+            }
             vc.modalPresentationStyle = .fullScreen
             self.bridge?.viewController?.present(vc, animated: true)
             call.resolve()
@@ -34,9 +39,11 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 }
 
-final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
+final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, UIGestureRecognizerDelegate {
     var onExit: ((Double, Bool, Double) -> Void)?
     var onProgress: ((Double, Double) -> Void)?
+    var onAirPlay: ((Double) -> Void)?
+    private let airplay = AVRoutePickerView()
     private var lastProgress: Double = 0
     private var startChecked = false
     private var length: Double { Double(player.media?.length.intValue ?? 0) / 1000 }
@@ -140,7 +147,12 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         if #available(iOS 14.0, *) { subsButton.showsMenuAsPrimaryAction = true }
         subsButton.isHidden = true
 
-        for v in [close, back, fwd, playButton, title, timeLabel, slider, subsButton] as [UIView] {
+        airplay.tintColor = .white
+        airplay.activeTintColor = .systemBlue
+        if #available(iOS 13.0, *) { airplay.prioritizesVideoDevices = true }
+        NotificationCenter.default.addObserver(self, selector: #selector(routeChanged), name: AVAudioSession.routeChangeNotification, object: nil)
+
+        for v in [close, back, fwd, playButton, title, timeLabel, slider, subsButton, airplay] as [UIView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             controls.addSubview(v)
         }
@@ -155,7 +167,11 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
             close.heightAnchor.constraint(equalToConstant: 44),
             title.leadingAnchor.constraint(equalTo: close.trailingAnchor, constant: 12),
             title.centerYAnchor.constraint(equalTo: close.centerYAnchor),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: subsButton.leadingAnchor, constant: -16),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: airplay.leadingAnchor, constant: -16),
+            airplay.trailingAnchor.constraint(equalTo: subsButton.leadingAnchor, constant: -8),
+            airplay.centerYAnchor.constraint(equalTo: close.centerYAnchor),
+            airplay.widthAnchor.constraint(equalToConstant: 44),
+            airplay.heightAnchor.constraint(equalToConstant: 44),
             subsButton.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -16),
             subsButton.centerYAnchor.constraint(equalTo: close.centerYAnchor),
             subsButton.widthAnchor.constraint(equalToConstant: 44),
@@ -187,17 +203,23 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         NSLayoutConstraint.activate([hint.centerXAnchor.constraint(equalTo: view.centerXAnchor), hint.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 70), hint.heightAnchor.constraint(equalToConstant: 34)])
 
         // Tik: bediening tonen/verbergen. Dubbeltik of knijpen: heel beeld / beeld vullen (zoals in Apple's eigen speler)
+        // Knoppen (kruisje, pauze, schuifbalk) krijgen hun tik altijd zelf: de gebaren hieronder kijken er niet naar
         let double = UITapGestureRecognizer(target: self, action: #selector(doubleTapped))
         double.numberOfTapsRequired = 2
+        double.delegate = self
         view.addGestureRecognizer(double)
-        view.addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:))))
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
+        pinch.delegate = self
+        view.addGestureRecognizer(pinch)
         let tap = UITapGestureRecognizer(target: self, action: #selector(toggleControls))
         tap.cancelsTouchesInView = false
         tap.require(toFail: double)
+        tap.delegate = self
         videoView.addGestureRecognizer(tap)
         let tap2 = UITapGestureRecognizer(target: self, action: #selector(toggleControls))
         tap2.cancelsTouchesInView = false
         tap2.require(toFail: double)
+        tap2.delegate = self
         controls.addGestureRecognizer(tap2)
 
         let media = VLCMedia(url: url)
@@ -263,6 +285,12 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
     }
     @objc private func doubleTapped() { setFill(!fill) }
 
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        var v = touch.view
+        while let x = v, x !== view { if x is UIControl || x is AVRoutePickerView { return false }; v = x.superview }
+        return true
+    }
+
     private func symbolButton(_ name: String, size: CGFloat, action: Selector) -> UIButton {
         let b = UIButton(type: .system)
         b.setImage(UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: .semibold)), for: .normal)
@@ -309,6 +337,30 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
     }
     @objc private func sliderEnd() { player.position = slider.value; seeking = false; scheduleHide() }
     @objc private func closeTapped() { finish(ended: false) }
+
+    @objc private func routeChanged() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, !self.finished else { return }
+            let toTV = AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .airPlay }
+            guard toTV else { return }
+            self.finished = true
+            let t = self.everPlayed ? self.seconds : 0
+            self.player.stop()
+            let back = self.presentingViewController
+            self.dismiss(animated: true) { [weak self] in
+                MainViewController.backToPortrait(back)
+                self?.onAirPlay?(t)
+            }
+        }
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    // Stond AirPlay al aan voordat je op afspelen tikte? Dan meteen via Apple's speler naar de tv
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        routeChanged()
+    }
 
     private func finish(ended: Bool) {
         if finished { return }

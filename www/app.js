@@ -1553,6 +1553,12 @@ $('#loginForm').onsubmit = async e => {
 // ================= Start =================
 $$('.nav-pill button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
 let lastScroll = 0, navScrolled = false;
+// iPhone: na het toetsenbord (zoeken) of het draaien bleven de vaste balken soms halverwege het scherm hangen.
+// Even "op dezelfde plek scrollen" laat de telefoon alles opnieuw goed neerzetten.
+const resettle = () => setTimeout(() => requestAnimationFrame(() => window.scrollTo(window.scrollX, window.scrollY)), 60);
+addEventListener('focusout', e => { if (e.target.matches?.('input, textarea')) resettle(); });
+addEventListener('orientationchange', resettle);
+window.visualViewport?.addEventListener('resize', resettle);
 // window.__lastInput: de achtergrond-voorbereiding in de telefoon-app wacht tot je even niets doet
 addEventListener('pointerdown', () => { window.__lastInput = performance.now(); }, { passive: true, capture: true });
 document.addEventListener('scroll', e => {
