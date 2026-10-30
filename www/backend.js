@@ -343,6 +343,27 @@ async function justWatchPoster(type, name) {
 }
 // Titel zonder jaartal, taal-labels en [haakjes] om op te zoeken
 const tidyTitle = n => String(n || '').replace(/\[[^\]]*\]/g, '').replace(/\(\s*\d{4}[^)]*\)/g, '').replace(/\b(NL GESPROKEN|HQ|4K|UHD)\b/gi, '').replace(/\s+/g, ' ').trim();
+// Jaartal van een serie = het jaar van de nieuwste aflevering van het laatste seizoen.
+// De info van de aanbieder is soms oud (Andy & Melisa: afleveringen "2015"), terwijl de naam wel "(2026)" zegt:
+// daarom telt ook het (laatste) jaar in de naam mee, en wint het nieuwste.
+const yearIn = d => { const y = +String(d || '').slice(0, 4); return y > 1900 && y <= new Date().getFullYear() + 1 ? y : 0; };
+const nameYear = n => Math.max(0, ...[...String(n || '').matchAll(/\b(19\d\d|20\d\d)\b/g)].map(m => yearIn(m[1])));
+function seriesYear(info, name) {
+  const eps = info?.episodes || {};
+  const last = Object.keys(eps).filter(k => Number(k) > 0).sort((a, b) => a - b).pop();
+  const air = Math.max(0, ...(eps[last] || []).map(e => yearIn(e.info?.air_date || e.info?.releasedate)),
+    ...(Array.isArray(info?.seasons) ? info.seasons : []).filter(s => String(s.season_number) === String(last)).map(s => yearIn(s.air_date)));
+  const i = Array.isArray(info?.info) ? {} : info?.info || {};
+  return Math.max(air, nameYear(name)) || yearIn(i.releaseDate || i.release_date) || 0;
+}
+async function seriesYears(ids, names = {}) {
+  const out = {};
+  await Promise.all(ids.slice(0, 16).map(async id => {
+    try { out[id] = seriesYear(await cached('si:' + id, () => api({ action: 'get_series_info', series_id: id }), true), names[id]); } catch {}
+  }));
+  return out;
+}
+
 // Titels die de app meestuurt (om op te zoeken als de aanbieder zelf geen naam in de info heeft)
 const artNames = s => { try { const o = JSON.parse(s || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
 async function artFor(type, ids, names = {}) {
@@ -839,6 +860,7 @@ async function route(url, init) {
     const off = Math.max(0, Number(q.offset) || 0), lim = Math.min(300, Number(q.limit) || 120);
     return { total: pool.length, items: pool.slice(off, off + lim) };
   }
+  if (p === '/api/seriesyears') return seriesYears(String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)), artNames(q.names));
   if (p === '/api/art') return artFor(q.type === 'series' ? 'series' : 'vod', String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)), artNames(q.names));
   if (p === '/api/latest') {
     const pool = await nlPool('vod');

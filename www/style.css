@@ -707,3 +707,6 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
   .nav-account { right: calc(var(--tb-right) + 14px); top: 4px; }
   .top-pad { padding-top: calc(var(--tb-h) + 24px); }
 }
+
+.h-year { font-weight: 600; opacity: .6; }
+

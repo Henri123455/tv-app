@@ -85,11 +85,38 @@ function tidyCat(s) {
 const tidyName = s => fixCaps(String(s || '')).replace(SUP, '').replace(/^\s*\[[^\]]{1,24}\]\s*/, '').replace(/^\s*(16K|8K|4K|UHD|FHD|HD|SD)\s*[|:-]\s*/i, '').replace(/\s+/g, ' ').trim();
 const initials = n => esc(tidyName(n).replace(/[^\p{L}\p{N} ]/gu, '').split(' ').filter(Boolean).slice(0, 2).map(w => w.slice(0, w.length < 4 ? 4 : 1)).join(' ').slice(0, 8) || '•');
 // Series: het jaartal van het laatste seizoen in plaats van het startjaar ("Manifest (2018 - 2023)" wordt "Manifest (2023)").
-// Dat jaar weten we zodra de serie een keer is geopend; tot die tijd zonder jaartal.
+// Meteen: het nieuwste jaar uit de naam. Zodra een serie in beeld komt haalt de app (op de achtergrond) het jaar
+// van de nieuwste aflevering op en past het aan; dat wordt onthouden.
 const YEAR_RE = /\s*\(\s*(19|20)\d\d\s*(-\s*((19|20)\d\d)?\s*)?\)\s*$/;
 const lastSeason = {};
-try { Object.assign(lastSeason, JSON.parse(localStorage.getItem('lastSeason')) || {}); } catch {}
-const seriesName = x => { const n = tidyName(x.n).replace(YEAR_RE, ''); const y = lastSeason[x.id]; return y ? `${n} (${y})` : n; };
+try { Object.assign(lastSeason, JSON.parse(localStorage.getItem('lastSeason2')) || {}); } catch {}
+const yearFromName = n => Math.max(0, ...[...String(n || '').matchAll(/\b(19\d\d|20\d\d)\b/g)].map(m => +m[1]).filter(y => y <= new Date().getFullYear() + 1));
+const seriesName = x => { const n = tidyName(x.n).replace(YEAR_RE, ''); const y = lastSeason[x.id] || yearFromName(x.n) || +x.y || 0; return y ? `${n} (${y})` : n; };
+function rememberYears(m) {
+  for (const [id, y] of Object.entries(m)) if (y) lastSeason[id] = y;
+  try { localStorage.setItem('lastSeason2', JSON.stringify(lastSeason)); } catch {}
+}
+const yearQueue = new Set();
+let yearTimer, yearBusy = false;
+const yearIO = new IntersectionObserver(es => es.forEach(e => {
+  if (!e.isIntersecting) return;
+  yearIO.unobserve(e.target);
+  const id = e.target.dataset.sy;
+  if (id && !lastSeason[id]) { yearQueue.add(id); clearTimeout(yearTimer); yearTimer = setTimeout(flushYears, 400); }
+}), { rootMargin: '200px 300px' });
+async function flushYears() {
+  if (yearBusy || !yearQueue.size) return;
+  yearBusy = true;
+  const ids = [...yearQueue].slice(0, 8); ids.forEach(id => yearQueue.delete(id));
+  const names = Object.fromEntries(ids.map(id => [id, $(`[data-sy="${CSS.escape(id)}"]`)?.textContent || '']));
+  try {
+    const m = await api(`/api/seriesyears?ids=${ids.join(',')}&names=${encodeURIComponent(JSON.stringify(names))}`);
+    rememberYears(m);
+    for (const [id, y] of Object.entries(m)) if (y) $$(`[data-sy="${CSS.escape(id)}"]`).forEach(el => { el.textContent = el.textContent.replace(YEAR_RE, '') + ` (${y})`; el.removeAttribute('data-sy'); });
+  } catch {}
+  yearBusy = false;
+  if (yearQueue.size) setTimeout(flushYears, 600); // rustig aan: niet alles tegelijk (zwakke telefoon, aanbieder)
+}
 // Speelduur netjes: "1 u 54 min" (de aanbieder geeft soms "01:54:00", soms alleen minuten "114")
 function fmtDuration(i) {
   let s = Number(i.duration_secs) || 0;
@@ -223,7 +250,7 @@ function cardHTML(type, x, opt = {}) {
   return `<button class="card ${live ? 'live' : 'poster'}" data-k="${esc(k)}">
     <div class="art">${img ? `<img decoding="async" referrerpolicy="no-referrer" alt="${esc(x.n)}" data-src="${esc(live ? img : sized(img))}">` : live ? `<span class="initials">${initials(x.n)}</span>` : placeholder(x.n)}
       <span class="fav-badge ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}">${HEART}</span>${prog}</div>
-    <div class="name">${esc(type === 'series' ? seriesName(x) : tidyName(x.n))}</div>${opt.sub ?`<div class="sub">${esc(opt.sub)}</div>` : ''}
+    <div class="name"${type === 'series' && !lastSeason[x.id] ? ` data-sy="${esc(x.id)}"` : ''}>${esc(type === 'series' ? seriesName(x) : tidyName(x.n))}</div>${opt.sub ?`<div class="sub">${esc(opt.sub)}</div>` : ''}
   </button>`;
 }
 // Afbeeldingen zacht laten infaden; kapotte logo's vervangen door initialen
@@ -240,6 +267,8 @@ new MutationObserver(ms => {
     if (n.nodeType !== 1) continue;
     if (n.matches('img[data-src]')) imgIO.observe(n);
     else n.querySelectorAll('img[data-src]').forEach(i => imgIO.observe(i));
+    if (n.matches('[data-sy]')) yearIO.observe(n);
+    else n.querySelectorAll('[data-sy]').forEach(el => yearIO.observe(el));
   }
 }).observe(document.documentElement, { childList: true, subtree: true });
 document.addEventListener('error', e => {
@@ -1006,15 +1035,16 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
   const seasons = Object.keys(eps).sort((a, b) => a - b);
   const h = hist().find(x => x.k === k);
   const backdrops = i.name ? [...(i.backdrop_path || []), it.b] : [];
-  // Jaartal van het laatste seizoen (uitzenddatums van seizoenen en afleveringen), anders het startjaar
+  // Jaartal = nieuwste aflevering van het laatste seizoen, of het nieuwste jaar in de naam (zelfde regel als op de kaarten)
   const yearOf = d => { const y = +String(d || '').slice(0, 4); return y > 1900 && y <= new Date().getFullYear() + 1 ? y : 0; };
-  const lastYear = Math.max(0, ...(Array.isArray(info.seasons) ? info.seasons : []).map(s => yearOf(s.air_date)),
-    ...seasons.flatMap(s => eps[s].map(e => yearOf(e.info?.air_date || e.info?.releasedate))))
-    || yearOf(i.releaseDate || i.release_date) || +(tidyName(it.n).match(/\((\d{4})/) || [])[1] || 0;
-  if (lastYear && lastSeason[it.id] !== lastYear) { lastSeason[it.id] = lastYear; try { localStorage.setItem('lastSeason', JSON.stringify(lastSeason)); } catch {} }
+  const lastS = seasons.filter(s => Number(s) > 0).pop();
+  const lastYear = Math.max(0, ...(eps[lastS] || []).map(e => yearOf(e.info?.air_date || e.info?.releasedate)),
+    ...(Array.isArray(info.seasons) ? info.seasons : []).filter(s => String(s.season_number) === String(lastS)).map(s => yearOf(s.air_date)),
+    yearFromName(it.n), yearFromName(i.name)) || yearOf(i.releaseDate || i.release_date) || 0;
+  if (lastYear && lastSeason[it.id] !== lastYear) { rememberYears({ [it.id]: lastYear }); $$(`.card[data-k="${CSS.escape(k)}"] .name`).forEach(el => { el.textContent = el.textContent.replace(YEAR_RE, '') + ` (${lastYear})`; }); }
   $('#sheetCard').innerHTML = CLOSE_BTN + `
-    <div class="sheet-hero"><div><h2>${esc(tidyName(i.name || it.n).replace(YEAR_RE, ''))}</h2>
-      <div class="meta">${metaHTML([lastYear ? (seasons.length > 1 ? `Laatste seizoen ${lastYear}` : String(lastYear)) : '', i.genre, Number(i.rating) ? { star: Number(i.rating).toFixed(1) } : '', seasons.length ? seasons.length + (seasons.length === 1 ? ' seizoen' : ' seizoenen') : ''])}</div></div></div>
+    <div class="sheet-hero"><div><h2>${esc(tidyName(i.name || it.n).replace(YEAR_RE, ''))}${lastYear ? ` <span class="h-year">(${lastYear})</span>` : ''}</h2>
+      <div class="meta">${metaHTML([i.genre, Number(i.rating) ? { star: Number(i.rating).toFixed(1) } : '', seasons.length ? seasons.length + (seasons.length === 1 ? ' seizoen' : ' seizoenen') : ''])}</div></div></div>
     <div class="sheet-body">
       <div class="hero-actions">
         ${h?.ep ? `<button class="btn primary" id="sResume">${PLAY_ICON}Verder: S${h.ep.season} A${h.ep.num}</button>` : seasons.length ? `<button class="btn primary" id="sFirst">${PLAY_ICON}Afspelen</button>` : ''}
