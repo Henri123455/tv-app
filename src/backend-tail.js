@@ -168,7 +168,7 @@ async function route(url, init) {
     const off = Math.max(0, Number(q.offset) || 0), lim = Math.min(300, Number(q.limit) || 120);
     return { total: pool.length, items: pool.slice(off, off + lim) };
   }
-  if (p === '/api/art') return artFor(q.type === 'series' ? 'series' : 'vod', String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)));
+  if (p === '/api/art') return artFor(q.type === 'series' ? 'series' : 'vod', String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)), artNames(q.names));
   if (p === '/api/latest') {
     const pool = await nlPool('vod');
     return memo(pool, 'latest', () => pool.filter(x => x.i && !KIDS_ROW.test(x.n.toUpperCase()) && !isKid('vod', x)).sort((a, b) => b.a - a.a).slice(0, 40));

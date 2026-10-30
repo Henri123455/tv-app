@@ -137,7 +137,8 @@ async function categories(type) {
 function fixIcon(u) {
   u = String(u || '').trim();
   let m;
-  if ((m = u.match(/diatunnel\.link(?::\d+)?\/images\/([A-Za-z0-9]{20,40})(?:_\w+)?\.(jpe?g|png)/i))) return `https://image.tmdb.org/t/p/w600_and_h900_bestv2/${m[1]}.${m[2]}`;
+  // Ook series-covers ("/images/series/<code>_small.jpg") en rare subdomeinen van diatunnel
+  if ((m = u.match(/diatunnel\.link(?::\d+)?\/images\/(?:[a-z]+\/)?([A-Za-z0-9]{20,40})(?:_\w+)?\.(jpe?g|png)/i))) return `https://image.tmdb.org/t/p/w600_and_h900_bestv2/${m[1]}.${m[2]}`;
   if ((m = u.match(/^https?:\/\/weserv\.[^/]+\/?\?url=([^&]+)/i))) { const inner = decodeURIComponent(m[1]); return /^https?:/.test(inner) ? inner : 'https://' + inner; }
   return u.replace(/^http:\/\/image\.tmdb\.org/, 'https://image.tmdb.org');
 }
@@ -312,19 +313,55 @@ async function rowCategories(type) {
 }
 
 // Plaatjes aanvullen voor titels zonder (werkend) plaatje: uit de detailinfo van de aanbieder
-async function artFor(type, ids) {
+// Ontbrekend of kapot plaatje: eerst de plaatjes uit de detailinfo van de aanbieder (alleen een plaatje dat echt laadt),
+// anders de poster opzoeken bij JustWatch op titel en jaar. De uitkomst wordt per titel onthouden.
+async function imageOk(u) {
+  if (!/^https?:\/\//.test(u || '')) return false;
+  // Harde grens van 6 s (op de telefoon luistert het native verzoek niet altijd naar een afbreek-signaal)
+  const check = fetch(u, { signal: AbortSignal.timeout(6000) }).then(r => r.ok && /^image\//.test(r.headers.get('content-type') || ''), () => false);
+  return Promise.race([check, new Promise(res => setTimeout(() => res(false), 6500))]);
+}
+const JW_SEARCH = `query S($q: String!) { popularTitles(country: NL, first: 5, filter: { searchQuery: $q }) {
+  edges { node { objectType content(country: NL, language: "nl") { title originalTitle originalReleaseYear posterUrl } } } } }`;
+async function justWatchPoster(type, name) {
+  const year = +(String(name).match(/\((\d{4})/) || [])[1] || 0;
+  const q = tidyTitle(name);
+  if (!q) return '';
+  const r = await fetch('https://apis.justwatch.com/graphql', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(8000),
+    body: JSON.stringify({ query: JW_SEARCH, variables: { q } }),
+  });
+  if (!r.ok) return '';
+  const want = type === 'vod' ? 'MOVIE' : 'SHOW';
+  const hits = ((await r.json()).data?.popularTitles?.edges || []).map(e => e.node).filter(n => n.content?.posterUrl);
+  // Alleen dezelfde titel (Nederlandse of originele naam) telt, liefst met hetzelfde jaar: nooit "een film uit hetzelfde jaar"
+  const key = popKey(q);
+  const same = n => n.objectType === want && (popKey(n.content.title) === key || popKey(n.content.originalTitle) === key);
+  const best = hits.find(n => same(n) && (!year || Math.abs(n.content.originalReleaseYear - year) <= 1))
+    || (!year ? null : hits.find(n => same(n) && Math.abs(n.content.originalReleaseYear - year) <= 3));
+  return best ? 'https://images.justwatch.com' + best.content.posterUrl.replace('{profile}', 's592').replace('{format}', 'jpg') : '';
+}
+// Titel zonder jaartal, taal-labels en [haakjes] om op te zoeken
+const tidyTitle = n => String(n || '').replace(/\[[^\]]*\]/g, '').replace(/\(\s*\d{4}[^)]*\)/g, '').replace(/\b(NL GESPROKEN|HQ|4K|UHD)\b/gi, '').replace(/\s+/g, ' ').trim();
+// Titels die de app meestuurt (om op te zoeken als de aanbieder zelf geen naam in de info heeft)
+const artNames = s => { try { const o = JSON.parse(s || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
+async function artFor(type, ids, names = {}) {
   const out = {};
   await Promise.all(ids.slice(0, 24).map(async id => {
     try {
-      if (type === 'vod') {
-        const j = await cached('vi:' + id, () => api({ action: 'get_vod_info', vod_id: id }), true);
+      out[id] = await cached(`art3:${type}:${id}`, async () => {
+        const j = type === 'vod'
+          ? await cached('vi:' + id, () => api({ action: 'get_vod_info', vod_id: id }), true)
+          : await cached('si:' + id, () => api({ action: 'get_series_info', series_id: id }), true);
         const i = Array.isArray(j.info) ? {} : j.info || {};
-        out[id] = fixIcon(i.movie_image || i.cover_big || (i.backdrop_path || [])[0] || '');
-      } else {
-        const j = await cached('si:' + id, () => api({ action: 'get_series_info', series_id: id }), true);
-        const i = Array.isArray(j.info) ? {} : j.info || {};
-        out[id] = fixIcon(i.cover || (i.backdrop_path || [])[0] || '');
-      }
+        const tries = [...new Set((type === 'vod' ? [i.movie_image, i.cover_big] : [i.cover]).map(fixIcon).filter(Boolean))];
+        for (const u of tries) if (await imageOk(u)) return u;
+        const jw = await Promise.race([justWatchPoster(type, names[id] || i.name || i.o_name || '').catch(() => ''), new Promise(res => setTimeout(() => res(''), 9000))]);
+        if (jw) return jw;
+        // Laatste kans: een liggende foto uit de info (alleen als die echt laadt)
+        for (const u of [...new Set((i.backdrop_path || []).map(fixIcon))].filter(u => u && !tries.includes(u)).slice(0, 2)) if (await imageOk(u)) return u;
+        return '';
+      }, true, 7 * 864e5);
     } catch { out[id] = ''; }
   }));
   return out;
@@ -802,7 +839,7 @@ async function route(url, init) {
     const off = Math.max(0, Number(q.offset) || 0), lim = Math.min(300, Number(q.limit) || 120);
     return { total: pool.length, items: pool.slice(off, off + lim) };
   }
-  if (p === '/api/art') return artFor(q.type === 'series' ? 'series' : 'vod', String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)));
+  if (p === '/api/art') return artFor(q.type === 'series' ? 'series' : 'vod', String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)), artNames(q.names));
   if (p === '/api/latest') {
     const pool = await nlPool('vod');
     return memo(pool, 'latest', () => pool.filter(x => x.i && !KIDS_ROW.test(x.n.toUpperCase()) && !isKid('vod', x)).sort((a, b) => b.a - a.a).slice(0, 40));

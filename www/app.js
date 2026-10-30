@@ -257,6 +257,8 @@ const artCache = new Map(), artTried = new Set(), badArt = new Set(), artQueue =
 let artTimer;
 function needArt(type, id) {
   const k = favKey(type, id);
+  // Al eens een goed plaatje gevonden (bijv. rij opnieuw getekend)? Meteen weer gebruiken
+  if (artCache.get(k)) return void setTimeout(() => applyArt(type, id, artCache.get(k)), 0);
   if (artTried.has(k)) return;
   artTried.add(k);
   if (!artQueue.has(type)) artQueue.set(type, []);
@@ -266,10 +268,13 @@ function needArt(type, id) {
 function flushArt() {
   for (const [type, ids] of artQueue) {
     artQueue.delete(type);
-    for (let i = 0; i < ids.length; i += 24)
-      api(`/api/art?type=${type}&ids=${ids.slice(i, i + 24).join(',')}`).then(m => {
+    for (let i = 0; i < ids.length; i += 24) {
+      const part = ids.slice(i, i + 24);
+      const names = Object.fromEntries(part.map(id => [id, items.get(favKey(type, id))?.n || $(`.card[data-k="${CSS.escape(favKey(type, id))}"] .name`)?.textContent || '']));
+      api(`/api/art?type=${type}&ids=${part.join(',')}&names=${encodeURIComponent(JSON.stringify(names))}`).then(m => {
         for (const [id, url] of Object.entries(m)) if (url && !badArt.has(url)) applyArt(type, id, url);
       }).catch(() => {});
+    }
   }
 }
 function applyArt(type, id, url) {
