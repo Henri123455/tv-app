@@ -1,6 +1,6 @@
 // TV — afspelen in de iPhone-app.
-//  - Apple's eigen speler (AVPlayer): voor zenders en gewone .mp4 — met AirPlay en beeld-in-beeld
-//  - ingebouwde VLC-speler (zoals UHF): voor .mkv/.avi, HEVC-zenders en streams met een verkeerd label
+//  - Apple's eigen speler (AVPlayer): voor gewone .mp4-films — met AirPlay en beeld-in-beeld
+//  - ingebouwde VLC-speler (zoals UHF): voor alle zenders, .mkv/.avi en streams met een verkeerd label
 // Lukt Apple's speler niet (meteen weer dicht zonder beeld), dan neemt VLC het vanzelf over.
 (function () {
 'use strict';
@@ -78,7 +78,7 @@ playLive = function (item, ctx) {
     play({
       url: src('live', sources[i], 'm3u8'), title: tidyName(item.n), sub: 'Live',
       exit: pos => { if (pos < 0.5 && Date.now() - t0 < 40000 && i + 1 < sources.length) tryIdx(i + 1); },
-    });
+    }, true); // Zenders altijd in VLC: Apple's speler haperde of gaf alleen het QuickTime-teken bij deze streams
   };
   tryIdx(0);
 };

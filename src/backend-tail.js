@@ -196,7 +196,7 @@ async function route(url, init) {
     const nlSet = await nlCatSet(type);
     return [].concat(...parts)
       .filter(x => titleKey(x.n) === key && String(x.id) !== String(q.id))
-      .sort((a, b) => (isCam(a) - isCam(b)) || (nlSet.has(b.c) - nlSet.has(a.c)) || ((a.hq ? 1 : 0) - (b.hq ? 1 : 0)))
+      .sort((a, b) => versionScore(b, nlSet) - versionScore(a, nlSet))
       .slice(0, 6).map(x => ({ id: x.id, e: x.e, hq: x.hq }));
   }
   if (p === '/api/versions') {

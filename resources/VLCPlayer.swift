@@ -163,11 +163,29 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
             spinner.centerYAnchor.constraint(equalTo: view.centerYAnchor),
         ])
 
+        view.clipsToBounds = true
+        hint.textColor = .white
+        hint.font = .boldSystemFont(ofSize: 15)
+        hint.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        hint.layer.cornerRadius = 10
+        hint.clipsToBounds = true
+        hint.alpha = 0
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(hint)
+        NSLayoutConstraint.activate([hint.centerXAnchor.constraint(equalTo: view.centerXAnchor), hint.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 70), hint.heightAnchor.constraint(equalToConstant: 34)])
+
+        // Tik: bediening tonen/verbergen. Dubbeltik of knijpen: heel beeld / beeld vullen (zoals in Apple's eigen speler)
+        let double = UITapGestureRecognizer(target: self, action: #selector(doubleTapped))
+        double.numberOfTapsRequired = 2
+        view.addGestureRecognizer(double)
+        view.addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:))))
         let tap = UITapGestureRecognizer(target: self, action: #selector(toggleControls))
         tap.cancelsTouchesInView = false
+        tap.require(toFail: double)
         videoView.addGestureRecognizer(tap)
         let tap2 = UITapGestureRecognizer(target: self, action: #selector(toggleControls))
         tap2.cancelsTouchesInView = false
+        tap2.require(toFail: double)
         controls.addGestureRecognizer(tap2)
 
         let media = VLCMedia(url: url)
@@ -204,7 +222,9 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
             size = CGSize(width: w * (num > 0 && den > 0 ? num / den : 1), height: h)
         }
         guard size.width > 0, size.height > 0, b.width > 0, b.height > 0 else { videoView.frame = b; return }
-        let scale = min(b.width / size.width, b.height / size.height)
+        // "Vullen" (knijpen of dubbeltikken): het beeld vult het hele scherm, randjes vallen weg.
+        // Handig bij films met zwarte balken in het beeld zelf.
+        let scale = fill ? max(b.width / size.width, b.height / size.height) : min(b.width / size.width, b.height / size.height)
         let w = (size.width * scale).rounded(), h = (size.height * scale).rounded()
         let f = CGRect(x: ((b.width - w) / 2).rounded(), y: ((b.height - h) / 2).rounded(), width: w, height: h)
         guard videoView.frame != f else { return }
@@ -212,6 +232,24 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         player.videoAspectRatio = nil
         player.scaleFactor = 0
     }
+
+    private static let fillKey = "tvVideoFill"
+    private var fill = UserDefaults.standard.bool(forKey: VLCPlayerViewController.fillKey)
+    private let hint = UILabel()
+
+    private func setFill(_ on: Bool) {
+        guard on != fill else { return }
+        fill = on
+        UserDefaults.standard.set(on, forKey: Self.fillKey)
+        UIView.animate(withDuration: 0.25) { self.fitVideo() }
+        hint.text = on ? "  Beeld vullen  " : "  Heel beeld  "
+        hint.alpha = 1
+        UIView.animate(withDuration: 0.4, delay: 1.0, options: []) { self.hint.alpha = 0 }
+    }
+    @objc private func pinched(_ g: UIPinchGestureRecognizer) {
+        if g.state == .ended { setFill(g.scale > 1) }
+    }
+    @objc private func doubleTapped() { setFill(!fill) }
 
     private func symbolButton(_ name: String, size: CGFloat, action: Selector) -> UIButton {
         let b = UIButton(type: .system)
@@ -266,7 +304,11 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate {
         hideTimer?.invalidate()
         let t = everPlayed ? seconds : 0
         player.stop()
-        dismiss(animated: true) { [weak self] in self?.onExit?(t, ended) }
+        let back = presentingViewController
+        dismiss(animated: true) { [weak self] in
+            MainViewController.backToPortrait(back)
+            self?.onExit?(t, ended)
+        }
     }
 
     func mediaPlayerStateChanged(_ aNotification: Notification) {

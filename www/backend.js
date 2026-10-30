@@ -190,7 +190,7 @@ function popScore(type, x) {
   const ageDays = x.a ? (Date.now() / 1000 - x.a) / 86400 : 999;
   // Wat Nederland deze week kijkt telt het zwaarst, daarna wat er in deze app bekeken wordt.
   // Echte kinderfilms/-series altijd achteraan (in de kinderrijen zelf blijft de volgorde gewoon kloppen)
-  return n * 100 + v * 60 + (x.r || 0) * 3 + Math.max(0, 90 - ageDays) / 90 * 25 - (isKid(type, x) ? 1e6 : 0);
+  return n * 100 + v * 15 + (x.r || 0) + Math.max(0, 90 - ageDays) / 90 * 10 - (isKid(type, x) ? 1e6 : 0);
 }
 // Elke score één keer uitrekenen en dan sorteren (scheelt veel rekenwerk op de telefoon)
 const byPop = (type, items) => items.map(x => [popScore(type, x), x]).sort((a, b) => b[0] - a[0]).map(e => e[1]);
@@ -215,13 +215,21 @@ async function loadKids(type) {
 // ---------- Eén versie per titel, Nederlands gaat voor ----------
 async function nlCatSet(type) {
   const cats = await categories(type);
-  return memo(cats, 'nlset', () => new Set(cats.filter(c => c.code === 'NL').map(c => c.id)));
+  return memo(cats, 'nlset', () => {
+    const s = new Set(cats.filter(c => c.code === 'NL').map(c => c.id));
+    s.cam = new Set(cats.filter(c => /\bCAM\b/i.test(c.name)).map(c => c.id)); // bijv. "BIOSCOOP CAM VERSIE"
+    return s;
+  });
 }
-// Bioscoop-opnames (CAM) alleen als er geen normale versie is
-const isCam = x => /\b(HD)?CAM\b|TELESYNC|\bHDTS\b/i.test(x.n || '');
+// Bioscoop-opnames (CAM) alleen als er geen normale versie is: herkend aan de naam én aan de categorie
+const isCam = (x, nlSet) => /\b(HD)?CAM\b|TELESYNC|\bHDTS\b/i.test(x.n || '') || !!nlSet?.cam?.has(x.c);
+// "HQ"-versies komen van een externe site: bij nieuwe films vaak een bioscoop-opname, en de server ligt vaker plat.
+// Daarom gaat de eigen versie van de aanbieder voor; HQ alleen als die er niet is.
+function versionScore(x, nlSet) {
+  return (isCam(x, nlSet) ? -50 : 0) + (nlSet.has(x.c) ? 8 : 0) + (x.lg === 'NL' ? 4 : x.lg === 'ALL' || !x.lg ? 1 : 0) + (x.hq ? -2 : 0) + (x.i ? 1 : 0);
+}
 function bestVersion(versions, nlSet) {
-  const score = x => (isCam(x) ? -50 : 0) + (nlSet.has(x.c) ? 8 : 0) + (x.lg === 'NL' ? 4 : x.lg === 'ALL' || !x.lg ? 1 : 0) + (x.hq ? 1 : 0) + (x.i ? 1 : 0);
-  return versions.reduce((a, b) => score(b) > score(a) ? b : a);
+  return versions.reduce((a, b) => versionScore(b, nlSet) > versionScore(a, nlSet) ? b : a);
 }
 function dedupe(items, nlSet) {
   const g = new Map();
@@ -230,7 +238,7 @@ function dedupe(items, nlSet) {
     const best = bestVersion(v, nlSet);
     if (v.length < 2) return best;
     // De andere versies onthouden: werkt de beste even niet (bijv. een kapotte HQ-server), dan neemt de app de volgende
-    const rest = v.filter(x => x !== best).sort((a, b) => (isCam(a) - isCam(b)) || (nlSet.has(b.c) - nlSet.has(a.c)) || ((b.lg === 'NL') - (a.lg === 'NL')));
+    const rest = v.filter(x => x !== best).sort((a, b) => versionScore(b, nlSet) - versionScore(a, nlSet));
     return { ...best, alt: rest.slice(0, 4).map(x => ({ id: x.id, e: x.e })) };
   });
 }
@@ -240,10 +248,10 @@ async function versionsOf(type, id, name, items) {
   const key = titleKey(name || ''), nlSet = await nlCatSet(type);
   const cats = new Map((await categories(type)).map(c => [c.id, c]));
   const seen = new Set();
-  const score = x => (String(x.id) === String(id) ? 1000 : 0) + (isCam(x) ? -50 : 0) + (nlSet.has(x.c) ? 8 : 0) + (x.lg === 'NL' ? 4 : 0) + (x.hq ? 1 : 0);
+  const score = x => (String(x.id) === String(id) ? 1000 : 0) + versionScore(x, nlSet);
   return items.filter(x => titleKey(x.n) === key && !seen.has(String(x.id)) && seen.add(String(x.id)))
     .sort((a, b) => score(b) - score(a)).slice(0, 12)
-    .map(x => ({ id: x.id, e: x.e, cat: cats.get(x.c)?.name || '', ...(x.hq ? { hq: 1 } : {}), ...(isCam(x) ? { cam: 1 } : {}), ...(nlSet.has(x.c) || x.lg === 'NL' ? { nl: 1 } : {}) }));
+    .map(x => ({ id: x.id, e: x.e, cat: cats.get(x.c)?.name || '', ...(x.hq ? { hq: 1 } : {}), ...(isCam(x, nlSet) ? { cam: 1 } : {}), ...(nlSet.has(x.c) || x.lg === 'NL' ? { nl: 1 } : {}) }));
 }
 
 async function nlPool(type) {
@@ -822,7 +830,7 @@ async function route(url, init) {
     const nlSet = await nlCatSet(type);
     return [].concat(...parts)
       .filter(x => titleKey(x.n) === key && String(x.id) !== String(q.id))
-      .sort((a, b) => (isCam(a) - isCam(b)) || (nlSet.has(b.c) - nlSet.has(a.c)) || ((a.hq ? 1 : 0) - (b.hq ? 1 : 0)))
+      .sort((a, b) => versionScore(b, nlSet) - versionScore(a, nlSet))
       .slice(0, 6).map(x => ({ id: x.id, e: x.e, hq: x.hq }));
   }
   if (p === '/api/versions') {
