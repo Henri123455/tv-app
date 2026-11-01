@@ -600,7 +600,7 @@ function topRows(type, box) {
 
 // Top 10 meest bekeken op dit moment (zoals in de Apple TV-app, met grote cijfers)
 function topTen(type) {
-  const el = rowEl(type === 'live' ? 'Top 10 zenders · nu' : type === 'vod' ? 'Top 10 films · meest bekeken' : 'Top 10 series · meest bekeken');
+  const el = rowEl(type === 'live' ? 'Top 10 zenders nu' : type === 'vod' ? 'Top 10 films · meest bekeken' : 'Top 10 series · meest bekeken');
   el.classList.add('top10');
   const shelf = $('.shelf', el);
   shelf.innerHTML = skeletons(type, 6);
@@ -609,18 +609,21 @@ function topTen(type) {
     if (!list.length) return el.remove();
     shelf._list = list; shelf._type = type;
     shelf.innerHTML = list.map((x, n) => `<div class="ranked ${type === 'live' ? 'live' : 'poster'}"><span class="rank-num">${n + 1}</span>${cardHTML(type, x)}</div>`).join('');
-    // Zenders: onder de naam wat er nu op is (rustig na elkaar opgehaald)
-    if (type === 'live') setTimeout(async () => {
-      for (const card of $$('.card[data-k]', shelf)) {
-        if (!card.isConnected) return;
-        const id = card.dataset.k.split(':')[1];
-        try {
-          const e = await api('/api/epg?id=' + id);
-          const now = e.find(x => x.s * 1000 <= Date.now() && x.e * 1000 > Date.now());
-          if (now && !$('.now-t', card)) card.insertAdjacentHTML('beforeend', `<div class="now-t">${esc(now.t)}</div>`);
-        } catch {}
-      }
-    }, 1500);
+    // Zenders: onder de naam wat er nu op is (rustig na elkaar opgehaald). De regel staat er altijd
+    // (eventueel leeg), zodat alle zenders even hoog blijven.
+    if (type === 'live') {
+      for (const card of $$('.card[data-k]', shelf)) card.insertAdjacentHTML('beforeend', '<div class="now-t">&nbsp;</div>');
+      setTimeout(async () => {
+        for (const card of $$('.card[data-k]', shelf)) {
+          if (!card.isConnected) return;
+          try {
+            const e = await api('/api/epg?id=' + card.dataset.k.split(':')[1]);
+            const now = e.find(x => x.s * 1000 <= Date.now() && x.e * 1000 > Date.now());
+            if (now) $('.now-t', card).textContent = now.t;
+          } catch {}
+        }
+      }, 1500);
+    }
   }
   return el;
 }

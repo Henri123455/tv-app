@@ -836,3 +836,11 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 
 /* ---------- Telefoon-app: geen aantallen achter de kopjes ---------- */
 .is-app .count, .is-app .row-head .count, .is-app .section-sub .count { display: none !important; }
+
+/* Top 3 allemaal licht goud; alle zenders even hoog */
+.top10 .ranked:nth-child(-n+3) .card .art { background: radial-gradient(120% 140% at 30% 0%, rgba(255,226,140,.38), rgba(255,255,255,.04) 55%), linear-gradient(160deg, #3b3526, #17150f); }
+.top10 .ranked:nth-child(-n+3) .rank-num { background: linear-gradient(180deg, #ffeaa8, rgba(255,226,140,.16)); -webkit-background-clip: text; background-clip: text; }
+.top10 .ranked { align-items: flex-end; }
+.top10 .ranked.live .card .now-t { height: 16px; line-height: 16px; }
+.top10 .ranked .card .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[data-theme="light"] .top10 .ranked:nth-child(-n+3) .card .art { background: linear-gradient(160deg, #fff8e1, #f3e6bd); }
