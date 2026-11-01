@@ -118,11 +118,15 @@ async function flushYears() {
   if (yearQueue.size) setTimeout(flushYears, 600); // rustig aan: niet alles tegelijk (zwakke telefoon, aanbieder)
 }
 // Speelduur netjes: "1 u 54 min" (de aanbieder geeft soms "01:54:00", soms alleen minuten "114")
-function fmtDuration(i) {
-  let s = Number(i.duration_secs) || 0;
-  const d = String(i.duration || '').trim();
+function durSecs(i) {
+  let s = Number(i?.duration_secs) || 0;
+  const d = String(i?.duration || '').trim();
   if (!s && /^\d+:\d+(:\d+)?$/.test(d)) s = d.split(':').reduce((a, v) => a * 60 + Number(v), 0) * (d.split(':').length === 2 ? 60 : 1);
   if (!s && /^\d+$/.test(d)) s = Number(d) * 60;
+  return s;
+}
+function fmtDuration(i) {
+  const s = durSecs(i);
   if (s < 60) return '';
   const h = Math.floor(s / 3600), m = Math.round(s % 3600 / 60);
   return h ? `${h} u ${m} min` : `${m} min`;
@@ -182,9 +186,11 @@ async function choose(p) {
   S.pages = {};
   startApp();
   const [f, h] = await Promise.all([api('/api/me/favs').catch(() => null), api('/api/me/history').catch(() => null)]);
-  const changed = (f && JSON.stringify(f) !== JSON.stringify(S.favs)) || (h && JSON.stringify(h) !== JSON.stringify(S.hist));
+  // Samenvoegen in plaats van overschrijven: per titel telt de nieuwste plek (pc of telefoon), zo gaat er nooit iets verloren
+  const merged = h ? mergeHist(S.hist, h) : null;
+  const changed = (f && JSON.stringify(f) !== JSON.stringify(S.favs)) || (merged && JSON.stringify(merged) !== JSON.stringify(S.hist));
   if (f) { S.favs = f; store.set(profileKey('favs'), f); }
-  if (h) { S.hist = h; store.set(profileKey('history'), h); }
+  if (merged) { S.hist = merged; store.set(profileKey('history'), merged); if (JSON.stringify(merged) !== JSON.stringify(h)) put('/api/me/history', merged); }
   if (changed && S.pages[S.tab]) { S.pages[S.tab].remove(); delete S.pages[S.tab]; setTab(S.tab); }
 }
 
@@ -203,11 +209,28 @@ function toggleFav(k) {
 }
 const hist = () => S.hist;
 let histTimer;
+function mergeHist(a, b) {
+  const m = new Map();
+  for (const x of [...(a || []), ...(b || [])]) { const o = m.get(x.k); if (!o || (x.t || 0) > (o.t || 0)) m.set(x.k, x); }
+  return [...m.values()].sort((x, y) => (y.t || 0) - (x.t || 0)).slice(0, 60);
+}
 function saveHist(entry) {
   S.hist = [{ ...entry, t: Date.now() }, ...S.hist.filter(x => x.k !== entry.k)].slice(0, 60);
   store.set(profileKey('history'), S.hist);
-  clearTimeout(histTimer); histTimer = setTimeout(() => put('/api/me/history', S.hist), 3000);
+  clearTimeout(histTimer); histTimer = setTimeout(flushHist, 3000);
 }
+// Meteen opslaan (ook als het venster/de app wordt gesloten): keepalive laat het verzoek afmaken
+function flushHist() {
+  clearTimeout(histTimer);
+  if (!S.profile) return;
+  fetch('/api/me/history', { method: 'PUT', keepalive: true, headers: { 'Content-Type': 'application/json', 'X-Profile': S.profile.id }, body: JSON.stringify(S.hist) }).catch(() => {});
+}
+addEventListener('pagehide', () => { saveProgress(); flushHist(); });
+// Terug in de app na een tijdje (of elk halfuur open): kijken of er nieuwe films/series zijn
+let lastFresh = Date.now();
+const freshen = () => { if (Date.now() - lastFresh < 20 * 60e3) return; lastFresh = Date.now(); for (const el of Object.values(S.pages)) el._refresh?.(); };
+document.addEventListener('visibilitychange', () => { if (document.hidden) { saveProgress(); flushHist(); } else freshen(); });
+setInterval(() => { if (!document.hidden && playerEl.hidden) freshen(); }, 5 * 60e3);
 
 // ================= Lijsten laden =================
 async function getCats(type) {
@@ -526,6 +549,7 @@ function setTab(tab) {
   $$('.nav-pill button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   closeGrid(true);
   for (const [k, el] of Object.entries(S.pages)) el.hidden = k !== tab;
+  S.pages[tab]?._showPending?.();
   if (!S.pages[tab] || tab === 'mine') {
     S.pages[tab]?.remove();
     const el = document.createElement('div'); el.className = 'page'; main.appendChild(el); S.pages[tab] = el;
@@ -637,7 +661,7 @@ async function renderBrowse(type) {
   topRows(type, top);
   if (type === 'vod') {
     const el = rowEl('Nieuw toegevoegd'); $('.shelf', el).innerHTML = skeletons(type); top.appendChild(el);
-    cachedApi('/api/latest').then(l => fillShelf($('.shelf', el), 'vod', l)).catch(() => el.remove());
+    cachedApi('/api/latest', l => fillShelf($('.shelf', el), 'vod', l)).then(l => fillShelf($('.shelf', el), 'vod', l)).catch(() => el.remove());
   }
   const nlBox = $('.rows-nl', page);
   if (nl.length) {
@@ -655,7 +679,15 @@ async function renderBrowse(type) {
         holder.appendChild(el);
       }
     };
-    try { drawRows(await cachedApi(`/api/rows?type=${type}`)); }
+    // Nieuwe films/series: eerst meteen de bewaarde rijen, daarna stil de verse lijst; die wordt getoond
+    // zodra dat niet stoort (je zit bovenaan of op een ander tabblad). Ook later opnieuw, als de app lang openstaat.
+    const onFresh = rows => {
+      if (S.tab === type && scrollY > 400) { page._pending = rows; return; }
+      drawRows(rows);
+    };
+    page._refresh = () => cachedApi(`/api/rows?type=${type}`, onFresh).catch(() => {});
+    page._showPending = () => { if (page._pending) { drawRows(page._pending); page._pending = null; } };
+    try { drawRows(await cachedApi(`/api/rows?type=${type}`, onFresh)); }
     catch { nl.forEach(c => holder.appendChild(lazyCategoryRow(type, c))); }
     // Alles op één plek: elke film/serie die er is (Nederlands eerst, populairste eerst)
     const label = type === 'vod' ? 'films' : 'series';
@@ -791,10 +823,79 @@ async function renderArchive() {
   $$('.chip', page).forEach(b => b.onclick = () => pick(b.dataset.date));
   pick((days[store.get('arch-day', 0)] || days[0]).date);
 }
+// ---- Zender aangetikt: kan hij terugkijken? Dan eerst kiezen: live, of terugkijken (dag → programma, of een eigen tijd) ----
+let archChans = null;
+const chanNorm = n => tidyName(n).toUpperCase().replace(/\b(HD|FHD|UHD|4K|SD|NL|ODIDO|RAW)\b/g, '').replace(/[^A-Z0-9]/g, '');
+async function archiveChannelFor(it) {
+  if (!archChans) archChans = cachedApi('/api/archive/channels').catch(() => { archChans = null; return []; });
+  const list = await archChans;
+  const ids = new Set([it.id, ...(it.alt || [])].map(String));
+  return list.find(c => ids.has(String(c.id))) || list.find(c => chanNorm(c.n) === chanNorm(it.n)) || null;
+}
+function dropSheet() { hideSheet(); const i = layers.indexOf(hideSheet); if (i >= 0) layers.splice(i, 1); }
+async function openChannel(it, ctx) {
+  const ch = await archiveChannelFor(it).catch(() => null);
+  if (!ch) return playLive(it, ctx);
+  const k = favKey('live', it.id);
+  const days = Array.from({ length: Math.max(1, Math.min(7, ch.days || 1)) }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    return { date: ymd(d), back: i, label: i === 0 ? 'Vandaag' : i === 1 ? 'Gisteren' : d.toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short' }) };
+  });
+  showSheet(`<div class="sheet-hero chan-hero"><div>${it.i ? `<span class="chan-logo-big"><img src="${esc(it.i)}" alt="" referrerpolicy="no-referrer"></span>` : ''}<h2>${esc(tidyName(it.n))}</h2><div class="meta" id="chNow"></div></div></div>
+    <div class="sheet-body">
+      <div class="hero-actions"><button class="btn primary" id="chLive">${PLAY_ICON}Kijk live</button><button class="btn glass ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}">${HEART}Mijn lijst</button></div>
+      <h3 class="arch-head">Terugkijken</h3>
+      <div class="seasons">${days.map(d => `<button class="chip" data-day="${d.back}">${esc(d.label)}</button>`).join('')}</div>
+      <div class="arch-time"><span>Of kies zelf een tijd</span><input type="time" id="chTime" value="20:00" step="300"><button class="btn glass" id="chTimeGo">${PLAY_ICON}Kijk vanaf deze tijd</button></div>
+      <div class="arch-list"><p class="muted">Laden…</p></div>
+    </div>`);
+  $('#chLive').onclick = () => { dropSheet(); playLive(it, ctx); };
+  api('/api/epg?id=' + it.id).then(e => {
+    const now = e.find(x => x.s * 1000 <= Date.now() && x.e * 1000 > Date.now());
+    if (now && $('#chNow')) $('#chNow').textContent = `Nu: ${now.t} · ${hhmm(now.s)}–${hhmm(now.e)}`;
+  }).catch(() => {});
+  let day = days[0], progs = [];
+  // Tijdzone van de aanbieder: afgeleid uit de programmagids (start-tekst vs. echte tijd)
+  let tzShift = 0;
+  const showDay = async back => {
+    day = days[back] || days[0];
+    $$('#sheetCard [data-day]').forEach(b => b.classList.toggle('active', +b.dataset.day === day.back));
+    const box = $('#sheetCard .arch-list'); if (!box) return;
+    box.innerHTML = '<p class="muted">Laden…</p>';
+    try { progs = await api(`/api/archive/day?id=${ch.id}&date=${day.date}`); } catch { progs = []; }
+    if (day !== days[back]) return;
+    const ref = progs.find(p => p.at);
+    if (ref) tzShift = Date.parse(ref.at.replace(' ', 'T') + ':00Z') - ref.s * 1000;
+    const past = progs.filter(p => p.s * 1000 < Date.now());
+    box.innerHTML = past.length ? past.map(p => {
+      const live = p.e * 1000 > Date.now();
+      return `<button class="arch-prog ${live ? 'now' : ''}" data-s="${p.s}"><b>${hhmm(p.s)}</b><span>${esc(p.t)}${live ? ' <i class="live-pill">NU</i>' : ''}</span><small>${Math.round((p.e - p.s) / 60)} min</small></button>`;
+    }).join('') : '<p class="muted">Geen uitzendingen gevonden voor deze dag.</p>';
+    $$('.arch-prog', box).forEach(b => b.onclick = () => { const p = progs.find(x => String(x.s) === b.dataset.s); dropSheet(); playArchive(ch, p, day.label); });
+    // Meteen naar de avond (of het nieuwste programma vandaag)
+    const target = $$('.arch-prog', box).find(b => new Date(+b.dataset.s * 1000).getHours() >= 20) || $$('.arch-prog', box).pop();
+    if (day.back > 0 && target) target.scrollIntoView({ block: 'nearest' });
+  };
+  $$('#sheetCard [data-day]').forEach(b => b.onclick = () => showDay(+b.dataset.day));
+  $('#chTimeGo').onclick = () => {
+    const [hh, mm] = ($('#chTime').value || '20:00').split(':').map(Number);
+    const d = new Date(day.date + 'T00:00:00'); d.setHours(hh, mm, 0, 0);
+    if (d.getTime() > Date.now() - 60000) return toast('Die tijd is nog niet geweest');
+    if (Date.now() - d.getTime() > (ch.days || 1) * 864e5) return toast('Zo ver terug kan deze zender niet');
+    const srv = new Date(d.getTime() + tzShift);
+    const at = `${srv.getUTCFullYear()}-${pad2(srv.getUTCMonth() + 1)}-${pad2(srv.getUTCDate())} ${pad2(srv.getUTCHours())}:${pad2(srv.getUTCMinutes())}`;
+    const s = Math.floor(d.getTime() / 1000), e = Math.min(Math.floor(Date.now() / 1000), s + 4 * 3600);
+    const prog = progs.find(p => p.s <= s && p.e > s);
+    dropSheet();
+    playArchive(ch, { at: tzShift || progs.length ? at : `${day.date} ${pad2(hh)}:${pad2(mm)}`, s, e, t: prog ? prog.t : tidyName(it.n) }, `${day.label}`);
+  };
+  showDay(0);
+}
 function playArchive(ch, p, dayLabel) {
   const at = p.at.replace(' ', ':').replace(/:(\d\d)$/, '-$1');
   const dur = Math.max(1, Math.ceil((p.e - p.s) / 60)) + 2;
-  const url = APPLE_NATIVE && S.session?.ffmpeg ? `/play/fmp4a/${ch.id}/${at}/${dur}/index.m3u8` : `/play/archive/${ch.id}/${at}/${dur}.m3u8`;
+  // Pc: via de pc (Dolby-geluid van o.a. NPO wordt AAC, anders geen geluid in Chrome)
+  const url = S.session?.ffmpeg ? `/play/fmp4a/${ch.id}/${at}/${dur}/index.m3u8${APPLE_NATIVE ? '' : '?w=1'}` : `/play/archive/${ch.id}/${at}/${dur}.m3u8`;
   playVod({ kind: 'archive', url, start: 0, duration: 0, title: p.t, sub: `${tidyName(ch.n)} · ${dayLabel} ${hhmm(p.s)}`, favKey: null, hist: null });
 }
 
@@ -934,7 +1035,7 @@ document.addEventListener('click', e => {
   if (card) {
     const it = items.get(card.dataset.k);
     const ctx = card.closest('[data-ctx]');
-    if (it.type === 'live') playLive(it, ctx?._list?.length ? ctx._list.map(x => ({ ...x, type: 'live' })) : [it]);
+    if (it.type === 'live') openChannel(it, ctx?._list?.length ? ctx._list.map(x => ({ ...x, type: 'live' })) : [it]);
     else openItem(it);
   }
 });
@@ -997,7 +1098,7 @@ async function openMovie(it) {
   const raw = Array.isArray(info.info) ? {} : info.info || {};
   const i = metaMatches(it.n, raw) ? raw : { duration_secs: raw.duration_secs, duration: raw.duration };
   const ext = md.container_extension || it.e || 'mp4';
-  const dur = Number(i.duration_secs) || 0;
+  const dur = durSecs(i) || durSecs(raw); // lengte: ook als de aanbieder alleen "114" (minuten) geeft
   const h = hist().find(x => x.k === k);
   const resume = h && h.pos > 30 && (!h.dur || h.pos < h.dur - 60) ? h.pos : 0;
   const backdrops = [...(i.backdrop_path || []), i.cover_big, i.movie_image];
@@ -1017,7 +1118,7 @@ async function openMovie(it) {
       <div class="credits">${i.cast ? `<div><b>Met</b> ${esc(i.cast)}</div>` : ''}${i.director ? `<div><b>Regie</b> ${esc(i.director)}</div>` : ''}</div>
     </div>`;
   heroArt($('#sheetCard .sheet-hero'), backdrops, it.i || i.movie_image || i.cover_big, 700);
-  const go = (start, v, rest) => playVod({ kind: 'movie', id: v ? v.id : it.id, ext: v ? v.e || 'mp4' : ext, start, duration: dur, title: tidyName(i.name || it.n), sub: (i.releasedate || '').slice(0, 4), favKey: k,
+  const go = (start, v, rest) => playVod({ kind: 'movie', id: v ? v.id : it.id, ext: v ? v.e || 'mp4' : ext, hq: v ? !!v.hq : !!it.hq, start, duration: dur, title: tidyName(i.name || it.n), sub: (i.releasedate || '').slice(0, 4), favKey: k,
     item: v ? { ...it, hq: v.hq, alt: rest.map(x => ({ id: x.id, e: x.e })) } : it, hist: { k, type: 'vod', id: it.id, n: it.n, i: it.i } });
   $('#mPlay').onclick = () => go(resume);
   $('#mRestart') && ($('#mRestart').onclick = () => go(0));
@@ -1062,7 +1163,7 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
   const playEp = (e, start = 0) => {
     const idx = flat.indexOf(e);
     playVod({
-      kind: 'series', id: e.id, ext: e.container_extension || 'mp4', start, duration: Number(e.info?.duration_secs) || 0,
+      kind: 'series', id: e.id, ext: e.container_extension || 'mp4', start, duration: durSecs(e.info),
       title: tidyName(i.name || it.n), sub: `S${e.season} A${e.episode_num} · ${tidyName(e.title)}`, favKey: k, item: it,
       hist: { k, type: 'series', id: it.id, n: it.n, i: it.i, b: it.b, ep: { id: e.id, season: e.season, num: e.episode_num } },
       next: flat[idx + 1] ? () => playEp(flat[idx + 1]) : null,
@@ -1099,10 +1200,10 @@ const HLS_CONFIG = {
   maxBufferLength: 40,
   maxMaxBufferLength: 90,
   backBufferLength: 20,
-  // Snel starten: het eerste stuk (deze aanbieder gebruikt stukken van 10 s) al afspelen terwijl het binnenkomt
-  progressive: true,
+  // Rustig en stabiel: hele stukken laden (half binnengekomen stukken gaven haperingen) en wat meer voorraad bij live
+  progressive: false,
   startFragPrefetch: true,
-  liveSyncDurationCount: 2,
+  liveSyncDurationCount: 3,
   liveMaxLatencyDurationCount: 10,
   maxLiveSyncPlaybackRate: 1.05,
   nudgeMaxRetry: 8,
@@ -1144,6 +1245,7 @@ function openPlayer() {
 function closePlayer() {
   saveProgress();
   destroyEngines();
+  stopSubs();
   playerEl.hidden = true; $('#pSide').hidden = true; document.body.style.overflow = '';
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   try { screen.orientation?.unlock?.(); } catch {}
@@ -1173,6 +1275,14 @@ async function attach(src, { forceNative = false } = {}) {
       if (d.levels.length > 1) { hls.autoLevelCapping = -1; hls.nextLevel = d.levels.length - 1; }
       video.play().catch(() => playerEl.classList.add('paused'));
     });
+    // Terugkijken dat leeg binnenkomt (aanbieder had het even te druk): de pc probeert opnieuw, wij halen het daarna opnieuw op
+    hls.on(Hls.Events.LEVEL_LOADED, (_, d) => {
+      if (P.live || !d.details?.endList || d.details.totalduration >= 1 || P.src !== src) return;
+      if ((P.emptyTries = (P.emptyTries || 0) + 1) > 6) return fallback();
+      setTimeout(() => { if (P.src === src) attach(src); }, 3000);
+    });
+    // Ondertitels in de afspeellijst (bij "HQ"-films): Nederlands of Engels, de rest niet
+    hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => applySubPref());
     hls.on(Hls.Events.ERROR, (_, d) => {
       if (!d.fatal) return;
       if (d.response?.code === 509) return tooMany();
@@ -1187,6 +1297,97 @@ async function attach(src, { forceNative = false } = {}) {
     video.play().catch(() => playerEl.classList.add('paused'));
   }
 }
+// ================= Ondertiteling (pc) =================
+// Alleen Nederlands en Engels. Bij omgezette films (.mkv) schrijft de pc de ondertitels mee weg terwijl de film
+// binnenkomt; de speler haalt ze steeds bij. Knop "CC" in de speler: Nederlands → Engels → uit (wordt onthouden).
+const SUB_LABEL = { nl: 'Nederlands', en: 'English' };
+const subTracks = {};
+let subTimer = null, subAvail = [];
+const subPref = () => store.get('subLang', 'nl');
+function trackFor(lang) {
+  if (!subTracks[lang]) subTracks[lang] = video.addTextTrack('subtitles', SUB_LABEL[lang], lang);
+  return subTracks[lang];
+}
+function clearTrack(t) { while (t.cues && t.cues.length) t.removeCue(t.cues[0]); }
+function stopSubs() {
+  clearInterval(subTimer); subTimer = null; subAvail = [];
+  for (const t of Object.values(subTracks)) { clearTrack(t); t.mode = 'disabled'; }
+  updateSubsBtn();
+}
+const vttTime = s => { const p = s.trim().split(':').map(x => Number(x.replace(',', '.'))); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1]; };
+function startSubs(o, start) {
+  stopSubs();
+  const seen = { nl: 0, en: 0 }, lastCue = {};
+  const pull = async () => {
+    if (P.opts !== o || !P.remux) return stopSubs();
+    for (const lang of ['nl', 'en']) {
+      try {
+        const r = await fetch(`/play/subs/${o.kind}/${o.id}/${start}/${lang}.vtt`, { cache: 'no-store' });
+        if (!r.ok) continue;
+        const blocks = (await r.text()).split(/\r?\n\r?\n/);
+        const t = trackFor(lang);
+        if (!subAvail.includes(lang)) { subAvail.push(lang); applySubPref(); }
+        for (let i = seen[lang]; i < blocks.length - 1; i++) { // laatste blok kan nog half zijn
+          const lines = blocks[i].split(/\r?\n/), at = lines.findIndex(l => l.includes('-->'));
+          if (at < 0) continue;
+          const [a, b] = lines[at].split('-->');
+          const text = lines.slice(at + 1).join('\n').replace(/<[^>]+>/g, '').trim();
+          if (!text) continue;
+          const start = vttTime(a), end = vttTime(b.split(' ').filter(Boolean)[0]);
+          // Lange zinnen langer in beeld (leestempo ~13 tekens per seconde, minstens 1,5 s, max 8 s),
+          // tot vlak voor de volgende ondertitel
+          const prev = lastCue[lang];
+          if (prev && prev.endTime > start - 0.05) prev.endTime = Math.max(prev.startTime + 0.5, Math.min(prev.endTime, start - 0.05));
+          const cue = new VTTCue(start, Math.max(end, start + Math.min(8, 1.5 + text.length / 13)), text);
+          try { t.addCue(cue); lastCue[lang] = cue; } catch {}
+        }
+        seen[lang] = Math.max(seen[lang], blocks.length - 1);
+      } catch {}
+    }
+  };
+  setTimeout(pull, 1500); setTimeout(pull, 3500);
+  subTimer = setInterval(pull, 8000);
+}
+function availableSubs() {
+  if (P.hls) return (P.hls.subtitleTracks || []).map((t, i) => ({ i, lang: /^(nl|nld|dut)/i.test(t.lang || t.name) ? 'nl' : /^(en|eng)/i.test(t.lang || t.name) ? 'en' : '' })).filter(x => x.lang);
+  return subAvail.map(lang => ({ lang }));
+}
+function applySubPref() {
+  const pref = subPref(), avail = availableSubs();
+  const pick = pref === 'off' ? null : avail.find(x => x.lang === pref) || avail.find(x => x.lang === 'nl') || avail[0];
+  if (P.hls) { P.hls.subtitleDisplay = !!pick; P.hls.subtitleTrack = pick ? pick.i : -1; }
+  for (const [lang, t] of Object.entries(subTracks)) t.mode = !P.hls && pick?.lang === lang ? 'showing' : 'disabled';
+  updateSubsBtn();
+}
+function updateSubsBtn() {
+  const b = $('#pSubs'); if (!b) return;
+  // Altijd zichtbaar bij films en series (ook als de ondertitels nog moeten binnenkomen)
+  b.hidden = !!P.live || playerEl.hidden;
+  const pref = subPref();
+  const on = pref !== 'off' && availableSubs().length > 0;
+  b.classList.toggle('on', on);
+  $('#pSubsLang').textContent = on ? pref.toUpperCase() : pref === 'off' ? 'UIT' : '';
+  b.title = pref === 'off' ? 'Ondertiteling uit' : 'Ondertiteling: ' + (SUB_LABEL[pref] || pref);
+}
+$('#pSubs')?.addEventListener('click', () => {
+  const avail = availableSubs().map(x => x.lang);
+  if (!avail.length) {
+    // Film rechtstreeks afgespeeld (geen ondertitels zichtbaar)? Via de pc opnieuw starten, die haalt de ondertitels eruit
+    if (P.opts && !P.remux && !P.hls && !P.opts.url && S.session?.ffmpeg && !IS_IOS) {
+      if (subPref() === 'off') store.set('subLang', 'nl');
+      toast('Ondertitels zoeken…');
+      P.opts.forceRemux = true; seekVod(curTime(), true);
+      return;
+    }
+    toast(P.remux && subTimer ? 'Ondertitels laden nog, of deze versie heeft geen Nederlandse/Engelse ondertitels' : 'Deze versie heeft geen Nederlandse of Engelse ondertitels');
+    return;
+  }
+  const order = [...new Set(['nl', 'en'].filter(l => avail.includes(l))), 'off'];
+  const next = order[(order.indexOf(subPref()) + 1) % order.length];
+  store.set('subLang', next); applySubPref();
+  toast(next === 'off' ? 'Ondertiteling uit' : 'Ondertiteling: ' + SUB_LABEL[next]);
+});
+
 function tooMany() {
   destroyEngines();
   showMsg('Al 2 schermen in gebruik', 'Je abonnement laat maar 2 apparaten tegelijk kijken. Stop op een ander apparaat en probeer het opnieuw.',
@@ -1218,6 +1419,12 @@ async function startStage() {
 function fallback() {
   if (P.live && P.stages && P.stage < P.stages.length - 1) { P.stage++; P.tries = 0; startStage(); return; }
   if (P.live && P.srcIdx < P.sources.length - 1) { switchSource(P.srcIdx + 1, true); return; }
+  // Film/aflevering kapot (bijv. server van een "HQ"-versie plat)? Meteen de volgende versie van dezelfde titel
+  if (!P.live && P.opts && !P.opts.url) {
+    const alts = P.opts.alts ||= (P.opts.item?.alt || []).filter(a => typeof a === 'object' && String(a.id) !== String(P.opts.id));
+    const a = alts.shift();
+    if (a) { toast('Andere versie geprobeerd'); Object.assign(P.opts, { id: a.id, ext: a.e || 'mp4', hq: !!a.hq, viaPc: false }); P.tries = 0; seekVod(P.opts.start || 0, true); return; }
+  }
   destroyEngines();
   showMsg('Afspelen lukt niet', P.live ? 'Deze zender reageert nu niet. Probeer een andere zender.' : 'Deze film/aflevering kan niet worden geladen.',
     P.live ? `<div class="hero-actions center"><button class="btn primary" onclick="zap(1)">Volgende zender</button></div>` : '');
@@ -1225,6 +1432,7 @@ function fallback() {
 // Welke videocodec een zender heeft (onthouden per apparaat): H.264 kan de iPhone zelf direct
 // afspelen, dus dan slaan we het omzetten via de pc over (sneller starten, minder werk voor de pc).
 const codecMemo = store.get('codecs', {});
+const liveInfo = store.get('liveInfo', {}); // pc: beeld- en geluidscodec per zender
 async function codecOf(id) {
   if (codecMemo[id]) return codecMemo[id];
   const c = await Promise.race([api('/api/codec?id=' + id).then(r => r.codec).catch(() => ''), new Promise(r => setTimeout(() => r(''), 5000))]);
@@ -1243,12 +1451,21 @@ async function switchSource(i, auto) {
     // H.264: eerst rechtstreeks bij de aanbieder (snelst, geen omweg), dan via de pc
     const direct = S.session.direct ? [`${S.session.direct.replace('/__/', '/live/')}/${id}.m3u8`] : [];
     P.stages = codec === 'h264' ? [...direct, `/play/live/${id}.m3u8`, `/play/fmp4/c/${id}/index.m3u8`, `/play/fmp4/x/${id}/index.m3u8`] : liveStages(id);
+  } else if (!APPLE_NATIVE && S.session?.ffmpeg) {
+    // Pc: zenders met Dolby-geluid (NPO e.d.) of HEVC-beeld via de pc (geluid naar AAC, beeld onaangeroerd).
+    // Gewone H.264+AAC-zenders rechtstreeks (sneller). Onbekend = via de pc (werkt altijd), en meten voor de volgende keer.
+    const info = liveInfo[id];
+    const direct = info && info.audio === 'aac' && (info.codec === 'h264' || (info.codec === 'hevc' && HEVC_OK));
+    const viaPc = info?.codec === 'hevc' && !HEVC_OK ? `/play/fmp4/x/${id}/index.m3u8` : `/play/fmp4/w/${id}/index.m3u8`;
+    P.stages = direct ? [`/play/live/${id}.m3u8`, viaPc] : [viaPc, `/play/live/${id}.m3u8`];
+    if (!info) api('/api/codec?id=' + id).then(r => { if (r.codec) { liveInfo[id] = r; store.set('liveInfo', liveInfo); } }).catch(() => {});
   } else P.stages = liveStages(id);
   startStage();
 }
 
 function playLive(item, ctx) {
   P.live = true; P.remux = false; P.offset = 0; P.opts = null;
+  stopSubs();
   P.item = item; P.ctx = ctx; P.idx = Math.max(0, ctx.findIndex(x => x.id === item.id));
   P.favKey = favKey('live', item.id);
   P.sources = [item.id, ...(item.alt || [])];
@@ -1289,12 +1506,14 @@ function vodURL(o, start) {
   if (o.url) return { url: o.url, remux: false };
   // iPhone + mp4: rechtstreeks bij de aanbieder (sneller doorspoelen, geen omweg via de pc)
   if (IS_IOS && S.session?.direct && !o.viaPc && /^(mp4|m4v|mov)$/i.test(o.ext)) return { url: `${S.session.direct.replace('/__/', `/${o.kind}/`)}/${o.id}.${o.ext}`, remux: false };
-  const browserOk = /^(mp4|m4v|webm|mov|m3u8)$/i.test(o.ext);
+  // "HQ"-versies zijn eigenlijk afspeellijsten: meteen als afspeellijst openen (anders eerst een fout en een omweg = traag)
+  if ((o.hq ?? (o.item?.hq && o.id === o.item.id)) && o.kind === 'movie') return { url: `/play/hq/${o.kind}/${o.id}.${o.ext}/index.m3u8`, remux: false };
+  const browserOk = /^(mp4|m4v|webm|mov|m3u8)$/i.test(o.ext) && !o.forceRemux;
   if (browserOk || !S.session?.ffmpeg || IS_IOS) return { url: `/play/${o.kind}/${o.id}.${o.ext}`, remux: false };
   return { url: `/play/remux/${o.kind}/${o.id}.${o.ext}?t=${Math.floor(start)}`, remux: true };
 }
 function playVod(o) {
-  P.live = false; P.item = { id: o.id }; P.opts = o; P.tries = 0; P.favKey = o.favKey; P.stages = null; P.sources = [];
+  P.live = false; P.item = { id: o.id }; P.opts = o; P.tries = 0; P.emptyTries = 0; P.favKey = o.favKey; P.stages = null; P.sources = [];
   P.duration = o.duration || 0;
   playerEl.classList.remove('live');
   $('#pTitle').textContent = o.title;
@@ -1324,6 +1543,7 @@ function seekVod(t, first) {
   if (!first && !P.remux && !v.remux) { video.currentTime = t; return; }
   P.remux = v.remux; P.offset = v.remux ? Math.floor(t) : 0;
   attach(v.url);
+  if (v.remux) startSubs(o, P.offset); else stopSubs();
   // Omgezette films/terugkijken groeien tijdens het kijken; de iPhone zou dan bij het "einde" beginnen
   const growing = /\/play\/fmp4[av]\//.test(v.url);
   if (!v.remux && (t > 0 || growing)) video.addEventListener('loadedmetadata', () => { video.currentTime = t; }, { once: true });

@@ -224,6 +224,9 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
 
         let media = VLCMedia(url: url)
         media.addOption(":network-caching=3000")
+        // Bij afspeellijsten met meerdere kwaliteiten (o.a. "HQ"-films): altijd de hoogste, het originele beeld
+        media.addOption(":adaptive-logic=highest")
+        media.addOption(":adaptive-maxwidth=3840")
         if start > 1 { media.addOption(":start-time=\(Int(start))") }
         player.media = media
         player.drawable = videoView
@@ -231,6 +234,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         spinner.startAnimating()
         player.play()
         scheduleHide()
+        scheduleBarChecks()
         // Na 10 seconden nog steeds geen beeld? Dan is deze bron kapot: sluiten zodat de app de volgende probeert
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             guard let self = self, !self.everPlayed, !self.finished else { return }
@@ -255,6 +259,8 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             let den = (track[VLCMediaTracksInformationSourceAspectRatioDenominator] as? NSNumber)?.doubleValue ?? 0
             size = CGSize(width: w * (num > 0 && den > 0 ? num / den : 1), height: h)
         }
+        // Zwarte balken die in de film zelf zitten zijn weggeknipt: dan telt alleen het echte beeld
+        size = CGSize(width: size.width * (1 - crop.left - crop.right), height: size.height * (1 - crop.top - crop.bottom))
         guard size.width > 0, size.height > 0, b.width > 0, b.height > 0 else { videoView.frame = b; return }
         // "Vullen" (knijpen of dubbeltikken): het beeld vult het hele scherm, randjes vallen weg.
         // Handig bij films met zwarte balken in het beeld zelf.
@@ -265,6 +271,73 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         videoView.frame = f
         player.videoAspectRatio = nil
         player.scaleFactor = 0
+    }
+
+    // ---- Zwarte balken in het beeld zelf automatisch wegknippen ----
+    // Sommige films hebben de zwarte balken "ingebakken" (bijv. een brede film in een 16:9-beeld). Op het bredere
+    // iPhone-scherm kwam er dan ook nog zwart links en rechts bij. De speler meet een paar keer (momentopnames)
+    // waar het beeld echt zwart is; alleen als twee metingen overeenkomen (een donkere scène telt niet) wordt
+    // het weggeknipt, in VLC zelf, zodat de ondertitels gewoon in beeld blijven.
+    private var crop: (top: CGFloat, bottom: CGFloat, left: CGFloat, right: CGFloat) = (0, 0, 0, 0)
+    private var lastBars: [CGFloat]?
+    private var cropped = false
+
+    private func scheduleBarChecks() {
+        for t in [12.0, 30.0, 60.0, 120.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in self?.detectBars() }
+        }
+    }
+
+    private func detectBars() {
+        guard !finished, player.isPlaying, !cropped else { return }
+        let file = NSTemporaryDirectory() + "tv-snap-\(UUID().uuidString).png"
+        player.saveVideoSnapshot(at: file, withWidth: 0, andHeight: 0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            defer { try? FileManager.default.removeItem(atPath: file) }
+            guard let self = self, !self.finished, let img = UIImage(contentsOfFile: file)?.cgImage,
+                  let bars = Self.blackBars(in: img) else { return }
+            if let prev = self.lastBars, zip(prev, bars).allSatisfy({ abs($0 - $1) < 0.015 }), bars.contains(where: { $0 > 0.03 }) {
+                self.applyCrop(bars, width: img.width, height: img.height)
+            }
+            self.lastBars = bars
+        }
+    }
+
+    private func applyCrop(_ bars: [CGFloat], width: Int, height: Int) {
+        let t = bars[0], l = bars[1]
+        let cw = Int((CGFloat(width) * (1 - 2 * l)).rounded()) & ~1, ch = Int((CGFloat(height) * (1 - 2 * t)).rounded()) & ~1
+        let cx = Int((CGFloat(width) * l).rounded()), cy = Int((CGFloat(height) * t).rounded())
+        guard cw > width / 3, ch > height / 3 else { return }
+        player.cropGeometry = strdup("\(cw)x\(ch)+\(cx)+\(cy)")
+        crop = (t, t, l, l)
+        cropped = true
+        videoView.frame = .zero // opnieuw passend maken
+        UIView.animate(withDuration: 0.3) { self.fitVideo() }
+    }
+
+    // Aandeel zwart boven/onder en links/rechts (symmetrisch: de kleinste van de twee kanten, want ondertitels kunnen
+    // in de onderste balk staan). nil = te donker beeld om iets over te zeggen.
+    private static func blackBars(in img: CGImage) -> [CGFloat]? {
+        let w = 192, h = max(2, Int(CGFloat(w) * CGFloat(img.height) / CGFloat(img.width)))
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let drawn = px.withUnsafeMutableBytes { buf -> Bool in
+            guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard drawn else { return nil }
+        let luma = { (x: Int, y: Int) -> Int in let i = (y * w + x) * 4; return (Int(px[i]) * 3 + Int(px[i + 1]) * 6 + Int(px[i + 2])) / 10 }
+        let rowBlack = { (y: Int) -> Bool in (0..<w).allSatisfy { luma($0, y) < 26 } }
+        let colBlack = { (x: Int) -> Bool in (0..<h).allSatisfy { luma(x, $0) < 26 } }
+        if rowBlack(h / 2) || colBlack(w / 2) { return nil } // middenin zwart: donkere scène, niet meten
+        var top = 0; while top < h / 3 && rowBlack(top) { top += 1 }
+        var bottom = 0; while bottom < h / 3 && rowBlack(h - 1 - bottom) { bottom += 1 }
+        var left = 0; while left < w / 3 && colBlack(left) { left += 1 }
+        var right = 0; while right < w / 3 && colBlack(w - 1 - right) { right += 1 }
+        // Een randje van 1 rij is geen balk; ietsje marge houden zodat er niets van het echte beeld af gaat
+        let tb = max(0, CGFloat(min(top, bottom)) - 1) / CGFloat(h), lr = max(0, CGFloat(min(left, right)) - 1) / CGFloat(w)
+        return [tb, lr]
     }
 
     private static let fillKey = "tvVideoFill"

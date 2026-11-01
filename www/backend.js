@@ -1,5 +1,5 @@
-// TV — het "brein" van de iPhone-app.
-// Doet wat op de pc server.js doet (lijsten, één beste versie, kopjes, zoeken, Top 10, terugkijken),
+﻿// TV â€” het "brein" van de iPhone-app.
+// Doet wat op de pc server.js doet (lijsten, Ã©Ã©n beste versie, kopjes, zoeken, Top 10, terugkijken),
 // maar dan in de app zelf: hij praat rechtstreeks met de Xtream-aanbieder. Geen pc nodig.
 // Dit bestand wordt gemaakt door scripts/build.js (kop + gedeelde logica uit server.js + staart).
 (function () {
@@ -9,7 +9,7 @@ const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && windo
 if (!NATIVE && !/[?&]app\b/.test(location.search)) return;
 
 const TTL = 30 * 60 * 1000;
-const LIST_TTL = 6 * 3600e3;
+const LIST_TTL = 3600e3; // elk uur kijken of er nieuwe films/series zijn
 const realFetch = window.fetch.bind(window); // in de app: native (geen CORS- of http-blokkade)
 
 // Opslag: kleine dingen in localStorage, grote lijsten in IndexedDB
