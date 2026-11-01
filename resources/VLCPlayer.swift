@@ -308,7 +308,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         let cw = Int((CGFloat(width) * (1 - 2 * l)).rounded()) & ~1, ch = Int((CGFloat(height) * (1 - 2 * t)).rounded()) & ~1
         let cx = Int((CGFloat(width) * l).rounded()), cy = Int((CGFloat(height) * t).rounded())
         guard cw > width / 3, ch > height / 3 else { return }
-        player.cropGeometry = strdup("\(cw)x\(ch)+\(cx)+\(cy)")
+        player.videoCropGeometry = strdup("\(cw)x\(ch)+\(cx)+\(cy)")
         crop = (t, t, l, l)
         cropped = true
         videoView.frame = .zero // opnieuw passend maken
