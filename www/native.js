@@ -14,11 +14,13 @@ const src = (kind, id, ext) => { const d = window.TVBackend.direct(); return `${
 const APPLE_EXT = /^(mp4|m4v|mov|m3u8)$/i;
 
 let cur = null;
-const done = (pos, ended, dur) => { const c = cur; cur = null; if (!c) return; if (ended) c.ended?.(); else c.exit?.(pos, dur); };
-AV?.addListener('jeepCapVideoPlayerReady', () => { if (cur?.start > 5) AV.setCurrentTime({ playerId: 'fullscreen', seektime: cur.start }).catch(() => {}); });
-AV?.addListener('jeepCapVideoPlayerExit', d => done(Number(d?.currentTime) || 0, false));
+// user = je hebt zelf gesloten (kruisje/Gereed): dan stoppen, nooit "kapot" denken en een andere bron starten
+const done = (pos, ended, dur, user) => { const c = cur; cur = null; if (!c) return; if (ended) c.ended?.(); else c.exit?.(pos, dur, user); };
+// Apple's speler: was de film geladen (klaar om te spelen)? Dan is sluiten altijd jouw keuze
+AV?.addListener('jeepCapVideoPlayerReady', () => { if (cur) cur.ready = true; if (cur?.start > 5) AV.setCurrentTime({ playerId: 'fullscreen', seektime: cur.start }).catch(() => {}); });
+AV?.addListener('jeepCapVideoPlayerExit', d => done(Number(d?.currentTime) || 0, false, 0, !!cur?.ready));
 AV?.addListener('jeepCapVideoPlayerEnded', () => done(0, true));
-VLC?.addListener('exit', d => done(Number(d?.currentTime) || 0, false, Number(d?.duration) || 0));
+VLC?.addListener('exit', d => done(Number(d?.currentTime) || 0, false, Number(d?.duration) || 0, !!d?.user));
 VLC?.addListener('ended', () => done(0, true));
 VLC?.addListener('airplay', d => { const c = cur; cur = null; c?.airplay?.(Number(d?.currentTime) || 0); });
 VLC?.addListener('progress', d => cur?.progress?.(Number(d?.currentTime) || 0, Number(d?.duration) || 0));
@@ -32,7 +34,7 @@ async function withVLC(o) {
 async function withApple(o) {
   const t0 = Date.now();
   // Meteen weer dicht zonder beeld? Dan was dit formaat niets voor Apple's speler: VLC proberen
-  cur = { ...o, exit: (pos, dur) => { if (VLC && pos < 0.5 && Date.now() - t0 < 20000) { withVLC(o); } else o.exit?.(pos, dur); } };
+  cur = { ...o, exit: (pos, dur, user) => { if (!user && VLC && pos < 0.5 && Date.now() - t0 < 20000) { withVLC(o); } else o.exit?.(pos, dur, user); } };
   try {
     const r = await AV.initPlayer({
       mode: 'fullscreen', playerId: 'fullscreen', componentTag: 'div', url: o.url,
@@ -67,7 +69,10 @@ async function alive(url, depth = 0) {
 }
 
 // Live: beste bron eerst (Apple's speler, met AirPlay); lukt het niet, dan VLC; en anders de volgende bron
+// Elke keer afspelen krijgt een nummer: een oudere zoektocht naar een werkende bron mag nooit meer iets starten
+let playRun = 0;
 playLive = function (item, ctx) {
+  const run = ++playRun;
   const sources = [item.id, ...(item.alt || [])];
   const k = favKey('live', item.id);
   items.set(k, { ...item, type: 'live' });
@@ -75,12 +80,14 @@ playLive = function (item, ctx) {
   countView(k, item);
   const tryIdx = async i => {
     // Kapotte bron? Meteen de volgende, zonder eerst de speler te openen
+    if (run !== playRun) return;
     if (i + 1 < sources.length && !(await alive(src('live', sources[i], 'm3u8')))) return tryIdx(i + 1);
+    if (run !== playRun) return;
     if (i > 0) toast('Andere bron geprobeerd');
     const t0 = Date.now();
     play({
       url: src('live', sources[i], 'm3u8'), title: tidyName(item.n), sub: 'Live',
-      exit: pos => { if (pos < 0.5 && Date.now() - t0 < 40000 && i + 1 < sources.length) tryIdx(i + 1); },
+      exit: (pos, dur, user) => { if (!user && pos < 0.5 && Date.now() - t0 < 40000 && i + 1 < sources.length) tryIdx(i + 1); },
     }, true); // Zenders altijd in VLC: Apple's speler haperde of gaf alleen het QuickTime-teken bij deze streams
   };
   tryIdx(0);
@@ -104,7 +111,9 @@ playVod = function (o) {
   if (!o.url && o.kind === 'movie') for (const a of o.item?.alt || []) if (typeof a === 'object') sources.push({ id: a.id, e: a.e });
   let seriesAlts = !o.url && o.kind === 'series' && o.hist?.ep ? (o.item?.alt || []).filter(a => typeof a === 'object').map(a => a.id) : [];
   let askedAlts = false;
+  const run = ++playRun;
   const tryIdx = async i => {
+    if (run !== playRun) return;
     let s = sources[i];
     if (!s && !seriesAlts.length && !askedAlts && !o.url) {
       // Alle bekende versies kapot: zoek dezelfde titel in alle lijsten (ook internationaal)
@@ -128,13 +137,14 @@ playVod = function (o) {
     }
     const url = s.url || src(o.kind, s.id, s.e);
     if (!s.url && !s.forced && !(await alive(url))) { s.dead = true; return tryIdx(i + 1); }
+    if (run !== playRun) return;
     if (i > 0) toast('Andere versie geprobeerd');
     const t0 = Date.now();
     let played = false;
     play({
       url, title: o.title, sub: o.sub || '', start: o.start || 0,
-      exit: (pos, dur) => {
-        if (pos < 0.5 && Date.now() - t0 < 45000 && !played) return tryIdx(i + 1);
+      exit: (pos, dur, user) => {
+        if (!user && pos < 0.5 && Date.now() - t0 < 45000 && !played) return tryIdx(i + 1);
         if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || o.duration || 0 });
       },
       // Tussendoor bewaren (elke 10 s): ook als de app wordt afgesloten of de telefoon uitvalt, weet hij waar je was

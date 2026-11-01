@@ -21,8 +21,9 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         let start = call.getDouble("start") ?? 0
         DispatchQueue.main.async {
             let vc = VLCPlayerViewController(url: url, title: title, start: start)
-            vc.onExit = { [weak self] seconds, ended, length in
-                self?.notifyListeners(ended ? "ended" : "exit", data: ["currentTime": seconds, "duration": length])
+            // user = zelf op het kruisje getikt (dan nooit een andere bron proberen), anders kapot/geen beeld
+            vc.onExit = { [weak self] seconds, ended, length, user in
+                self?.notifyListeners(ended ? "ended" : "exit", data: ["currentTime": seconds, "duration": length, "user": user])
             }
             // Elke 10 seconden doorgeven waar je bent: zo blijft "verder kijken" kloppen, ook als de app wordt afgesloten
             vc.onProgress = { [weak self] seconds, length in
@@ -40,7 +41,7 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
 }
 
 final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, UIGestureRecognizerDelegate {
-    var onExit: ((Double, Bool, Double) -> Void)?
+    var onExit: ((Double, Bool, Double, Bool) -> Void)?
     var onProgress: ((Double, Double) -> Void)?
     var onAirPlay: ((Double) -> Void)?
     private let airplay = AVRoutePickerView()
@@ -409,7 +410,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         if len > 0 { timeLabel.text = format(Double(slider.value) * len) + " / " + format(len) }
     }
     @objc private func sliderEnd() { player.position = slider.value; seeking = false; scheduleHide() }
-    @objc private func closeTapped() { finish(ended: false) }
+    @objc private func closeTapped() { finish(ended: false, user: true) }
 
     @objc private func routeChanged() {
         DispatchQueue.main.async { [weak self] in
@@ -435,7 +436,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         routeChanged()
     }
 
-    private func finish(ended: Bool) {
+    private func finish(ended: Bool, user: Bool = false) {
         if finished { return }
         finished = true
         hideTimer?.invalidate()
@@ -445,7 +446,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         let back = presentingViewController
         dismiss(animated: true) { [weak self] in
             MainViewController.backToPortrait(back)
-            self?.onExit?(t, ended, len)
+            self?.onExit?(t, ended, len, user)
         }
     }
 

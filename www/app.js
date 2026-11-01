@@ -1244,6 +1244,8 @@ function openPlayer() {
 }
 function closePlayer() {
   saveProgress();
+  // Zelf gesloten: alles wat nog liep (andere bron zoeken, opnieuw proberen) stopt hier, er start niets meer vanzelf
+  P.token = (P.token || 0) + 1; P.src = null; P.stages = null; P.opts = null;
   destroyEngines();
   stopSubs();
   playerEl.hidden = true; $('#pSide').hidden = true; document.body.style.overflow = '';
@@ -1260,6 +1262,7 @@ function showMsg(title, text, buttons = '') { const m = $('#pMsg'); m.innerHTML 
 function hideMsg() { $('#pMsg').hidden = true; }
 
 async function attach(src, { forceNative = false } = {}) {
+  if (playerEl.hidden) return; // speler al gesloten
   destroyEngines();
   P.src = src;
   setLoading(true); hideMsg();
@@ -1406,9 +1409,11 @@ function liveStages(id) {
   return s;
 }
 async function startStage() {
+  if (playerEl.hidden || !P.stages) return;
   const src = P.stages[P.stage];
   if (!src.startsWith('ts:')) return attach(src);
   try { await engines(); } catch {}
+  if (playerEl.hidden) return;
   if (!window.mpegts?.getFeatureList().mseLivePlayback) return fallback();
   destroyEngines(); P.src = src; setLoading(true);
   const pl = P.ts = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: `${location.origin}/play/live/${P.stream}.ts` }, { enableWorker: true, liveBufferLatencyChasing: true, liveBufferLatencyMaxLatency: 6, liveBufferLatencyMinRemain: 1.5, lazyLoad: false });
@@ -1417,6 +1422,7 @@ async function startStage() {
   video.play().catch(() => {});
 }
 function fallback() {
+  if (playerEl.hidden) return; // zelf gesloten: geen andere bron proberen
   if (P.live && P.stages && P.stage < P.stages.length - 1) { P.stage++; P.tries = 0; startStage(); return; }
   if (P.live && P.srcIdx < P.sources.length - 1) { switchSource(P.srcIdx + 1, true); return; }
   // Film/aflevering kapot (bijv. server van een "HQ"-versie plat)? Meteen de volgende versie van dezelfde titel
