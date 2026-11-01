@@ -1,5 +1,6 @@
 import UIKit
 import Capacitor
+import GoogleCast
 
 // Het hoofdscherm van de app (Capacitor):
 // - draait mee met de telefoon (rechtop en liggend); na een film volgt de app weer hoe je de telefoon vasthoudt
@@ -13,6 +14,12 @@ class MainViewController: CAPBridgeViewController {
     override var shouldAutorotate: Bool { true }
 
     override open func capacitorDidLoad() {
+        // Chromecast klaarzetten (één keer, vóór de speler opent)
+        if !GCKCastContext.isSharedInstanceInitialized() {
+            let options = GCKCastOptions(discoveryCriteria: GCKDiscoveryCriteria(applicationID: kGCKDefaultMediaReceiverApplicationID))
+            options.physicalVolumeButtonsWillControlDeviceVolume = true
+            GCKCastContext.setSharedInstanceWith(options)
+        }
         bridge?.registerPluginInstance(VLCPlayerPlugin())
     }
 

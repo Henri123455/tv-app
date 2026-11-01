@@ -23,12 +23,15 @@ AV?.addListener('jeepCapVideoPlayerEnded', () => done(0, true));
 VLC?.addListener('exit', d => done(Number(d?.currentTime) || 0, false, Number(d?.duration) || 0, !!d?.user));
 VLC?.addListener('ended', () => done(0, true));
 VLC?.addListener('airplay', d => { const c = cur; cur = null; c?.airplay?.(Number(d?.currentTime) || 0); });
+VLC?.addListener('pip', d => { const c = cur; cur = null; c?.pip?.(Number(d?.currentTime) || 0); });
 VLC?.addListener('progress', d => cur?.progress?.(Number(d?.currentTime) || 0, Number(d?.duration) || 0));
 
 async function withVLC(o) {
   // Naar de tv (AirPlay) gekozen in de speler: verder in Apple's speler op dezelfde plek, die stuurt het beeld door
-  cur = { ...o, airplay: pos => AV ? withApple({ ...o, start: pos > 5 ? pos : o.start || 0 }) : null };
-  try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live }); }
+  cur = { ...o, airplay: pos => AV ? withApple({ ...o, start: pos > 5 ? pos : o.start || 0 }) : null,
+    // Beeld-in-beeld: verder in Apple's speler; daar het beeld-in-beeld-knopje (of veeg naar het beginscherm)
+    pip: pos => { if (!AV) return; toast('Tik op het beeld-in-beeld-knopje in de speler'); withApple({ ...o, start: pos > 5 ? pos : o.start || 0 }); } };
+  try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live, series: !!o.series, nextTitle: o.nextTitle || '' }); }
   catch { cur = null; toast('Afspelen lukt niet'); }
 }
 async function withApple(o) {
@@ -143,6 +146,7 @@ playVod = function (o) {
     let played = false;
     play({
       url, title: o.title, sub: o.sub || '', start: o.start || 0,
+      series: o.kind === 'series', nextTitle: o.next ? (o.nextLabel || 'volgende') : '',
       exit: (pos, dur, user) => {
         if (!user && pos < 0.5 && Date.now() - t0 < 45000 && !played) return tryIdx(i + 1);
         if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || o.duration || 0 });

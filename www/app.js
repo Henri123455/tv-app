@@ -228,7 +228,7 @@ function flushHist() {
 addEventListener('pagehide', () => { saveProgress(); flushHist(); });
 // Terug in de app na een tijdje (of elk halfuur open): kijken of er nieuwe films/series zijn
 let lastFresh = Date.now();
-const freshen = () => { if (Date.now() - lastFresh < 20 * 60e3) return; lastFresh = Date.now(); for (const el of Object.values(S.pages)) el._refresh?.(); };
+const freshen = () => { if (Date.now() - lastFresh < 20 * 60e3) return; lastFresh = Date.now(); for (const el of Object.values(S.pages)) el._refresh?.(); checkNews(); };
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveProgress(); flushHist(); } else freshen(); });
 setInterval(() => { if (!document.hidden && playerEl.hidden) freshen(); }, 5 * 60e3);
 
@@ -621,7 +621,8 @@ async function renderLive() {
   topRows('live', $('.rows-top', page));
 
   const nlBox = $('.rows-nl', page);
-  nlBox.innerHTML = `<h2 class="section-title"><span class="nl-flag"></span>Nederland</h2>`;
+  nlBox.innerHTML = `<h2 class="section-title"><span class="nl-flag"></span>Nederland<button class="sport-pill" id="sportBtn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5l4 2.9-1.5 4.7h-5L8 10.4z"/></svg>Sport vandaag</button></h2>`;
+  $('#sportBtn', nlBox).onclick = openSportToday;
   for (const r of home.nl) nlBox.appendChild(itemsRow('live', r.title, r.items, { count: true }));
 
   const other = $('.rows-other', page);
@@ -823,6 +824,28 @@ async function renderArchive() {
   $$('.chip', page).forEach(b => b.onclick = () => pick(b.dataset.date));
   pick((days[store.get('arch-day', 0)] || days[0]).date);
 }
+// ---- Sport vandaag: alle wedstrijden/races/gevechten van vandaag, op tijd; tik = die zender live ----
+async function openSportToday() {
+  showSheet(`<div class="sheet-hero chan-hero"><div><h2>Sport vandaag</h2><div class="meta">Live op de Nederlandse sportzenders</div></div></div><div class="sheet-body"><div class="sport-list"><p class="muted">Programmagids laden…</p></div></div>`);
+  let list = [];
+  try { list = await api('/api/sport'); } catch {}
+  const box = $('#sheetCard .sport-list'); if (!box) return;
+  if (!list.length) { box.innerHTML = '<p class="muted">Geen sport gevonden in de programmagids van vandaag.</p>'; return; }
+  const now = Date.now() / 1000;
+  const row = (x, i) => `<button class="sport-item ${x.s <= now ? 'now' : ''}" data-si="${i}">
+      <span class="sport-time">${x.s <= now ? '<i class="live-pill">LIVE</i>' : hhmm(x.s)}<small>${hhmm(x.e)}</small></span>
+      <span class="sport-main"><b>${esc(x.t)}</b><small>${esc(tidyName(x.ch.n))}</small></span>
+      ${x.ch.i ? `<span class="sport-logo"><img src="${esc(x.ch.i)}" alt="" referrerpolicy="no-referrer" loading="lazy"></span>` : ''}</button>`;
+  const live = list.filter(x => x.s <= now), later = list.filter(x => x.s > now);
+  box.innerHTML = (live.length ? `<h3 class="arch-head">Nu bezig</h3>${live.map(x => row(x, list.indexOf(x))).join('')}` : '') +
+    (later.length ? `<h3 class="arch-head">Straks</h3>${later.map(x => row(x, list.indexOf(x))).join('')}` : '');
+  $$('.sport-item', box).forEach(b => b.onclick = () => {
+    const x = list[+b.dataset.si]; dropSheet();
+    const it = { ...x.ch, type: 'live' }; items.set(favKey('live', it.id), it);
+    playLive(it, [it]);
+  });
+}
+
 // ---- Zender aangetikt: kan hij terugkijken? Dan eerst kiezen: live, of terugkijken (dag → programma, of een eigen tijd) ----
 let archChans = null;
 const chanNorm = n => tidyName(n).toUpperCase().replace(/\b(HD|FHD|UHD|4K|SD|NL|ODIDO|RAW)\b/g, '').replace(/[^A-Z0-9]/g, '');
@@ -943,13 +966,16 @@ function renderSearch() {
         const r = await api(`/api/search?q=${encodeURIComponent(q)}&sort=${sort}`);
         if (my !== seq) return;
         const parts = [['live', 'Zenders'], ['vod', 'Films'], ['series', 'Series']].filter(([t]) => r[t].length);
-        if (!parts.length) { out.innerHTML = `<div class="empty"><h3>Niets gevonden</h3><p>Probeer een andere zoekterm.</p></div>`; return; }
+        // Volgen: melding (belletje) zodra er iets met deze naam bij komt, bijv. een wedstrijd die nog niet beschikbaar is
+        const followBtn = q.length >= 3 ? `<button class="follow-btn" data-follow="${esc(q)}"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>Laat het me weten als er iets nieuws met "${esc(q)}" verschijnt</button>` : '';
+        if (!parts.length) { out.innerHTML = `<div class="empty"><h3>Niets gevonden</h3><p>Probeer een andere zoekterm.</p>${followBtn}</div>`; $('[data-follow]', out)?.addEventListener('click', e => followTerm(e.currentTarget.dataset.follow)); return; }
         // Per soort alleen de beste paar; de rest achter "Alles laten zien" (zo hoef je bij een film niet langs 100 zenders)
         const max = t => TUNE.search[t === 'live' ? 0 : 1] * (TOUCH ? 1 : 2);
         out.innerHTML = parts.map(([t, label]) => `<h3 class="section-sub">${label} <span class="count">${r[t].length}</span></h3><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx data-type="${t}">${r[t].slice(0, max(t)).map(x => cardHTML(t, x)).join('')}</div>` +
           (r[t].length > max(t) ? `<button class="show-all" data-all="${t}"><span>Alles laten zien</span><small>${r[t].length} ${label.toLowerCase()}</small>${CHEVRON}</button>` : '')).join('');
         $$('.grid[data-ctx]', out).forEach(g => { g._list = r[g.dataset.type]; g._type = g.dataset.type; });
         $$('[data-all]', out).forEach(b => b.onclick = () => { const t = b.dataset.all; openGridItems(`${parts.find(p => p[0] === t)[1]} · ${q}`, t, r[t]); });
+        if (followBtn) { out.insertAdjacentHTML('beforeend', followBtn); $('[data-follow]', out).onclick = e => followTerm(e.currentTarget.dataset.follow); }
       } catch { out.innerHTML = '<div class="empty"><p>Zoeken mislukt.</p></div>'; }
     }, now ? 0 : 280);
   };
@@ -1167,6 +1193,7 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
       title: tidyName(i.name || it.n), sub: `S${e.season} A${e.episode_num} · ${tidyName(e.title)}`, favKey: k, item: it,
       hist: { k, type: 'series', id: it.id, n: it.n, i: it.i, b: it.b, ep: { id: e.id, season: e.season, num: e.episode_num } },
       next: flat[idx + 1] ? () => playEp(flat[idx + 1]) : null,
+      nextLabel: flat[idx + 1] ? `S${flat[idx + 1].season} A${flat[idx + 1].episode_num}` : '',
     });
   };
   const showSeason = s => {
@@ -1246,6 +1273,7 @@ function closePlayer() {
   saveProgress();
   // Zelf gesloten: alles wat nog liep (andere bron zoeken, opnieuw proberen) stopt hier, er start niets meer vanzelf
   P.token = (P.token || 0) + 1; P.src = null; P.stages = null; P.opts = null;
+  hideNextUp(); toggleIntro(false);
   destroyEngines();
   stopSubs();
   playerEl.hidden = true; $('#pSide').hidden = true; document.body.style.overflow = '';
@@ -1579,7 +1607,40 @@ video.addEventListener('error', () => {
   if (!P.live && P.opts && !P.opts.url && !P.remux && S.session?.ffmpeg && !IS_IOS) { P.remux = true; P.offset = Math.floor(curTime()); attach(`/play/remux/${P.opts.kind}/${P.opts.id}.${P.opts.ext}?t=${P.offset}`); return; }
   fallback();
 });
-video.addEventListener('ended', () => { saveProgress(); if (P.opts?.next) P.opts.next(); });
+video.addEventListener('ended', () => { saveProgress(); hideNextUp(); if (P.opts?.next) P.opts.next(); });
+
+// ---- Series: "Intro overslaan" in het begin, en aan het eind de volgende aflevering met aftellen ----
+function seriesExtras() {
+  const o = P.opts;
+  if (!o || P.live || playerEl.hidden) return hideNextUp(), toggleIntro(false);
+  const c = curTime(), d = totalTime();
+  toggleIntro(o.kind === 'series' && !o.introSkipped && c > 5 && c < 150);
+  if (o.next && d > 60 && d - c <= 15 && !o.nextCancelled) showNextUp(Math.max(0, Math.ceil(d - c)));
+  else hideNextUp();
+}
+function toggleIntro(on) {
+  let b = $('#pIntro');
+  if (!b && on) {
+    b = document.createElement('button'); b.id = 'pIntro'; b.className = 'skip-btn'; b.textContent = 'Intro overslaan';
+    b.onclick = e => { e.stopPropagation(); P.opts.introSkipped = true; toggleIntro(false); seekVod(curTime() + 80); };
+    playerEl.appendChild(b);
+  }
+  if (b) b.hidden = !on;
+}
+function showNextUp(sec) {
+  let c = $('#pNext2');
+  if (!c) {
+    c = document.createElement('div'); c.id = 'pNext2'; c.className = 'next-up';
+    c.innerHTML = `<button class="next-go">${PLAY_ICON}<span></span></button><button class="next-no" title="Annuleren"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`;
+    $('.next-go', c).onclick = e => { e.stopPropagation(); const n = P.opts?.next; hideNextUp(); saveProgress(); n && n(); };
+    $('.next-no', c).onclick = e => { e.stopPropagation(); if (P.opts) P.opts.nextCancelled = true; hideNextUp(); };
+    playerEl.appendChild(c);
+  }
+  $('.next-go span', c).textContent = `Volgende aflevering${P.opts?.nextLabel ? ' · ' + P.opts.nextLabel : ''} (${sec})`;
+  c.hidden = false;
+}
+function hideNextUp() { const c = $('#pNext2'); if (c) c.hidden = true; }
+video.addEventListener('timeupdate', seriesExtras);
 let seeking = false;
 video.addEventListener('timeupdate', () => {
   if (P.live) return;
@@ -1666,8 +1727,62 @@ function openQuality() {
 }
 
 // Naar tv sturen: AirPlay (iPhone/Mac), Chromecast (Android/Chrome), anders uitleg
-$('#pCast').onclick = () => {
+// ---- Chromecast vanaf de pc (Chrome): de tv haalt het beeld via de pc op, in een vorm die elke Chromecast kan ----
+let castLoaded = null;
+function loadCast() {
+  if (castLoaded) return castLoaded;
+  castLoaded = new Promise((res, rej) => {
+    window.__onGCastApiAvailable = ok => ok ? res() : rej(new Error('geen cast'));
+    const s = document.createElement('script');
+    s.src = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
+    s.onerror = () => rej(new Error('niet geladen'));
+    document.head.appendChild(s);
+    setTimeout(() => rej(new Error('traag')), 8000);
+  }).then(() => {
+    cast.framework.CastContext.getInstance().setOptions({ receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID, autoJoinPolicy: chrome.auth?.AutoJoinPolicy?.ORIGIN_SCOPED || 'origin_scoped' });
+  }).catch(e => { castLoaded = null; throw e; });
+  return castLoaded;
+}
+function castMedia() {
+  const lan = S.session?.lan; if (!lan) return null;
+  const pos = P.live ? 0 : curTime();
+  if (P.live) return { url: `${lan}/play/fmp4/w/${P.stream}/index.m3u8`, type: 'application/x-mpegurl', fmp4: true, live: true, pos };
+  const o = P.opts; if (!o) return null;
+  if (o.kind === 'archive') return { url: lan + o.url.replace(/\?.*$/, '') + '?w=1', type: 'application/x-mpegurl', fmp4: /fmp4a/.test(o.url), pos };
+  if (o.hq ?? o.item?.hq) return { url: `${lan}/play/hq/${o.kind}/${o.id}.${o.ext}/index.m3u8`, type: 'application/x-mpegurl', fmp4: false, pos };
+  if (/^(mp4|m4v)$/i.test(o.ext) && S.session.direct) return { url: `${S.session.direct.replace('/__/', `/${o.kind}/`)}/${o.id}.${o.ext}`, type: 'video/mp4', pos };
+  return { url: `${lan}/play/fmp4v/${o.kind}/${o.id}.${o.ext}/index.m3u8?w=1`, type: 'application/x-mpegurl', fmp4: true, pos };
+}
+async function chromecast() {
+  const m = castMedia(); if (!m) return false;
+  try { await loadCast(); } catch { return false; }
+  const ctx = cast.framework.CastContext.getInstance();
+  try { if (!ctx.getCurrentSession()) await ctx.requestSession(); } catch { return true; } // venster weggeklikt
+  const session = ctx.getCurrentSession(); if (!session) return true;
+  const info = new chrome.cast.media.MediaInfo(m.url, m.type);
+  info.streamType = m.live ? chrome.cast.media.StreamType.LIVE : chrome.cast.media.StreamType.BUFFERED;
+  if (m.type.includes('mpegurl')) {
+    info.hlsSegmentFormat = m.fmp4 ? chrome.cast.media.HlsSegmentFormat.FMP4 : chrome.cast.media.HlsSegmentFormat.TS;
+    info.hlsVideoSegmentFormat = m.fmp4 ? chrome.cast.media.HlsVideoSegmentFormat.FMP4 : chrome.cast.media.HlsVideoSegmentFormat.MPEG2_TS;
+  }
+  info.metadata = new chrome.cast.media.GenericMediaMetadata();
+  info.metadata.title = $('#pTitle').textContent;
+  const req = new chrome.cast.media.LoadRequest(info);
+  req.currentTime = m.pos || 0; req.autoplay = true;
+  // Eigen beeld stoppen: de aanbieder staat maar 2 verbindingen toe, de tv heeft er nu een nodig
+  destroyEngines(); P.token = (P.token || 0) + 1;
+  try { await session.loadMedia(req); }
+  catch { showMsg('Casten lukt niet', 'De tv kon dit niet afspelen. Probeer een andere bron of zender.'); return true; }
+  showMsg('Speelt af op je tv', `Op ${esc(session.getCastDevice().friendlyName || 'je Chromecast')}.`,
+    `<div class="hero-actions center"><button class="btn primary" id="castStop">Stoppen met casten</button></div>`);
+  $('#castStop').onclick = () => { session.endSession(true); hideMsg(); closeTop(); };
+  return true;
+}
+
+$('#pCast').onclick = async () => {
   if (video.webkitShowPlaybackTargetPicker) { video.webkitShowPlaybackTargetPicker(); return; }
+  // Chrome op de pc: echte Chromecast-knop
+  if (window.chrome && !/Edg\//.test(navigator.userAgent) && !TOUCH && S.session?.lan && await chromecast()) return;
   if (video.remote && video.remote.state !== 'connected') {
     if (P.hls && video.canPlayType('application/vnd.apple.mpegurl')) {
       const src = P.live && S.session?.ffmpeg ? `/play/fmp4/c/${P.stream}/index.m3u8` : P.src;
@@ -1829,10 +1944,102 @@ document.addEventListener('scroll', e => {
   if (s !== navScrolled) { navScrolled = s; $('#nav').classList.toggle('scrolled', s); }
 }, { passive: true, capture: true });
 
+// ================= Nieuw voor jou =================
+// Een belletje bovenin. Meldt: nieuwe afleveringen van series die je volgt (Mijn lijst + recent bekeken),
+// en titels die je via Zoeken "volgt" (bijv. een bokswedstrijd die nog niet beschikbaar is) zodra ze er zijn.
+// Gecontroleerd bij het openen van de app en daarna af en toe; per profiel bewaard.
+const watchKey = () => profileKey('watch');
+const watchData = () => Object.assign({ eps: {}, terms: [], news: [] }, store.get(watchKey(), {}));
+const saveWatch = w => { w.news = w.news.slice(0, 40); store.set(watchKey(), w); updateBell(w); };
+function updateBell(w = watchData()) {
+  const n = w.news.filter(x => !x.read).length;
+  const b = $('#newsBtn'); if (!b) return;
+  b.classList.toggle('has', n > 0);
+  $('#newsCount').textContent = n > 9 ? '9+' : n || '';
+}
+function followTerm(q) {
+  q = q.trim(); if (q.length < 3) return;
+  const w = watchData();
+  if (w.terms.some(t => t.q.toLowerCase() === q.toLowerCase())) return toast('Je volgt dit al');
+  // Wat er nu al is telt niet als nieuw: alleen wat er hierna bij komt wordt gemeld
+  api('/api/search?q=' + encodeURIComponent(q)).then(r => {
+    const w2 = watchData();
+    w2.terms.push({ q, seen: ['live', 'vod', 'series'].flatMap(t => (r[t] || []).map(x => t + ':' + x.id)) });
+    saveWatch(w2);
+    toast(`Je krijgt een melding zodra "${q}" verschijnt`);
+  }).catch(() => toast('Lukt nu even niet'));
+}
+let newsBusy = false;
+async function checkNews() {
+  if (newsBusy || !S.profile) return;
+  newsBusy = true;
+  const w = watchData();
+  let added = 0;
+  try {
+    // 1. Series die je volgt: telt het aantal afleveringen; meer dan vorige keer = nieuwe aflevering
+    const follow = [...S.favs.filter(f => f.type === 'series'), ...hist().filter(h => h.type === 'series')]
+      .filter((x, i, a) => a.findIndex(y => String(y.id) === String(x.id)) === i).slice(0, 15);
+    for (const s of follow) {
+      try {
+        const info = await api(`/api/seriesinfo?id=${s.id}`);
+        const all = Object.entries(info.episodes || {}).flatMap(([season, l]) => (l || []).map(e => ({ season, e })));
+        const count = all.length, last = all[all.length - 1];
+        const known = w.eps[s.id];
+        if (known != null && count > known && last) {
+          w.news.unshift({ key: 'ep:' + s.id + ':' + count, type: 'series', id: s.id, n: s.n, i: s.i, text: `Nieuwe aflevering: S${last.season} A${last.e.episode_num}`, t: Date.now() });
+          added++;
+        }
+        w.eps[s.id] = count;
+        await new Promise(r => setTimeout(r, 300)); // rustig aan (zwakke telefoon, aanbieder)
+      } catch {}
+    }
+    // 2. Gevolgde zoekwoorden: iets nieuws gevonden?
+    for (const term of w.terms) {
+      try {
+        const r = await api('/api/search?q=' + encodeURIComponent(term.q));
+        for (const t of ['vod', 'series', 'live']) for (const x of r[t] || []) {
+          const k = t + ':' + x.id;
+          if (term.seen.includes(k)) continue;
+          term.seen.push(k);
+          w.news.unshift({ key: 'q:' + k, type: t, id: x.id, n: x.n, i: x.i, alt: x.alt, text: `Nu te zien (je volgt "${term.q}")`, t: Date.now() });
+          added++;
+        }
+      } catch {}
+    }
+  } finally { newsBusy = false; }
+  w.news = w.news.filter((x, i, a) => a.findIndex(y => y.key === x.key) === i);
+  saveWatch(w);
+  if (added) toast(added === 1 ? '1 nieuw ding voor jou (belletje bovenin)' : `${added} nieuwe dingen voor jou (belletje bovenin)`);
+}
+function openNews() {
+  const w = watchData();
+  const list = w.news.length ? w.news.map((x, i) => `<button class="news-item ${x.read ? '' : 'unread'}" data-ni="${i}">
+      <span class="news-art">${x.i ? `<img src="${esc(x.type === 'live' ? x.i : sized(x.i))}" alt="" referrerpolicy="no-referrer">` : ''}</span>
+      <span><b>${esc(x.type === 'series' ? tidyName(x.n).replace(YEAR_RE, '') : tidyName(x.n))}</b><small>${esc(x.text)}</small><small class="muted">${new Date(x.t).toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short' })}</small></span></button>`).join('')
+    : '<p class="muted">Nog niets nieuws. Hier verschijnen nieuwe afleveringen van je series en dingen die je volgt.</p>';
+  const terms = w.terms.length ? `<h3 class="arch-head">Je volgt</h3><div class="follow-list">${w.terms.map((t, i) => `<span class="chip">${esc(t.q)}<button data-unfollow="${i}" title="Niet meer volgen">×</button></span>`).join('')}</div>` : '';
+  showSheet(`<div class="sheet-hero chan-hero"><div><h2>Nieuw voor jou</h2><div class="meta">Nieuwe afleveringen en dingen die je volgt</div></div></div>
+    <div class="sheet-body"><div class="news-list">${list}</div>${terms}
+    <p class="muted small">Tip: zoek iets dat er nog niet is (bijv. een wedstrijd) en tik op "Laat het me weten".</p></div>`);
+  $$('#sheetCard [data-ni]').forEach(b => b.onclick = () => {
+    const x = w.news[+b.dataset.ni]; dropSheet();
+    const it = { ...x, type: x.type }; items.set(favKey(x.type, x.id), it);
+    if (x.type === 'live') openChannel(it, [it]); else openItem(it);
+  });
+  $$('#sheetCard [data-unfollow]').forEach(b => b.onclick = () => { const w2 = watchData(); w2.terms.splice(+b.dataset.unfollow, 1); saveWatch(w2); openNews(); });
+  w.news.forEach(x => x.read = true); saveWatch(w);
+}
+
 function startApp() {
   hideAll();
   $('#nav').hidden = false; main.hidden = false;
   $('#accountBtn').innerHTML = avatarHTML(S.profile, 'sm');
+  if (!$('#newsBtn')) {
+    $('#accountBtn').insertAdjacentHTML('beforebegin', `<button id="newsBtn" class="nav-bell" title="Nieuw voor jou"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><i id="newsCount"></i></button>`);
+    $('#newsBtn').onclick = openNews;
+  }
+  updateBell();
+  setTimeout(checkNews, IS_APP ? 20000 : 8000);
   // Opstartscherm blijft staan tot de eerste pagina klaar is (minstens 1 en hoogstens 4 seconden),
   // zodat je meteen een volle, rustige pagina ziet in plaats van alles dat nog binnenkomt
   const t0 = Date.now();

@@ -2,6 +2,7 @@ import UIKit
 import AVFoundation
 import AVKit
 import Capacitor
+import GoogleCast
 import MobileVLCKit
 
 // Ingebouwde VLC-speler (zoals in UHF): speelt ook .mkv/.avi, HEVC-zenders en streams met een verkeerd label af,
@@ -20,8 +21,12 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         let title = call.getString("title") ?? ""
         let start = call.getDouble("start") ?? 0
         let live = call.getBool("live") ?? false
+        let series = call.getBool("series") ?? false
+        let nextTitle = call.getString("nextTitle") ?? ""
         DispatchQueue.main.async {
             let vc = VLCPlayerViewController(url: url, title: title, start: start, live: live)
+            vc.series = series
+            vc.nextTitle = nextTitle
             // user = zelf op het kruisje getikt (dan nooit een andere bron proberen), anders kapot/geen beeld
             vc.onExit = { [weak self] seconds, ended, length, user in
                 self?.notifyListeners(ended ? "ended" : "exit", data: ["currentTime": seconds, "duration": length, "user": user])
@@ -34,6 +39,10 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             vc.onAirPlay = { [weak self] seconds in
                 self?.notifyListeners("airplay", data: ["currentTime": seconds])
             }
+            // Beeld-in-beeld: VLC kan dat niet, Apple's speler wel; de app gaat daar op dezelfde plek verder
+            vc.onPip = { [weak self] seconds in
+                self?.notifyListeners("pip", data: ["currentTime": seconds])
+            }
             vc.modalPresentationStyle = .fullScreen
             self.bridge?.viewController?.present(vc, animated: true)
             call.resolve()
@@ -41,10 +50,20 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 }
 
-final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, UIGestureRecognizerDelegate {
+final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, UIGestureRecognizerDelegate, GCKSessionManagerListener {
     var onExit: ((Double, Bool, Double, Bool) -> Void)?
     var onProgress: ((Double, Double) -> Void)?
+    // Series: "Intro overslaan" in het begin, en aan het eind "Volgende aflevering" met aftellen
+    var series = false
+    var nextTitle = ""
+    private let introButton = UIButton(type: .system)
+    private let nextButton = UIButton(type: .system)
+    private var introSkipped = false
+    private var nextCancelled = false
     var onAirPlay: ((Double) -> Void)?
+    var onPip: ((Double) -> Void)?
+    private let castLabel = UILabel()
+    private var casting = false
     private let airplay = AVRoutePickerView()
     private var lastProgress: Double = 0
     private var startChecked = false
@@ -168,12 +187,52 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         if #available(iOS 13.0, *) { airplay.prioritizesVideoDevices = true }
         NotificationCenter.default.addObserver(self, selector: #selector(routeChanged), name: AVAudioSession.routeChangeNotification, object: nil)
 
-        for v in [close, back, fwd, playButton, title, timeLabel, slider, subsButton, airplay] as [UIView] {
+        // Chromecast-knop (verschijnt alleen als er een Chromecast/tv in je wifi is)
+        let castButton = GCKUICastButton(frame: CGRect(x: 0, y: 0, width: 24, height: 24))
+        castButton.tintColor = .white
+        castButton.translatesAutoresizingMaskIntoConstraints = false
+        controls.addSubview(castButton)
+        castLabel.textColor = .white
+        castLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        castLabel.textAlignment = .center
+        castLabel.numberOfLines = 2
+        castLabel.isHidden = true
+        castLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.insertSubview(castLabel, belowSubview: controls)
+        NSLayoutConstraint.activate([
+            castLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            castLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -70),
+            castLabel.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -40),
+        ])
+        GCKCastContext.sharedInstance().sessionManager.add(self)
+        let pipButton = symbolButton("pip.enter", size: 20, action: #selector(pipTapped))
+        pipButton.isHidden = !AVPictureInPictureController.isPictureInPictureSupported()
+        for v in [close, back, fwd, playButton, title, timeLabel, slider, subsButton, airplay, pipButton] as [UIView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             controls.addSubview(v)
         }
         spinner.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(spinner)
+
+        for (b, text, light) in [(introButton, "Intro overslaan", false), (nextButton, "Volgende aflevering", true)] {
+            b.setTitle(text, for: .normal)
+            b.titleLabel?.font = .systemFont(ofSize: 15, weight: .bold)
+            b.setTitleColor(light ? .black : .white, for: .normal)
+            b.backgroundColor = light ? .white : UIColor(white: 0.12, alpha: 0.8)
+            b.layer.cornerRadius = 12
+            b.layer.borderWidth = light ? 0 : 1.5
+            b.layer.borderColor = UIColor(white: 1, alpha: 0.6).cgColor
+            b.contentEdgeInsets = UIEdgeInsets(top: 12, left: 18, bottom: 12, right: 18)
+            b.isHidden = true
+            b.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(b)
+            NSLayoutConstraint.activate([
+                b.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20),
+                b.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -64),
+            ])
+        }
+        introButton.addTarget(self, action: #selector(skipIntro), for: .touchUpInside)
+        nextButton.addTarget(self, action: #selector(playNext), for: .touchUpInside)
 
         let g = controls.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
@@ -183,7 +242,15 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             close.heightAnchor.constraint(equalToConstant: 44),
             title.leadingAnchor.constraint(equalTo: close.trailingAnchor, constant: 12),
             title.centerYAnchor.constraint(equalTo: close.centerYAnchor),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: airplay.leadingAnchor, constant: -16),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: castButton.leadingAnchor, constant: -16),
+            castButton.trailingAnchor.constraint(equalTo: pipButton.leadingAnchor, constant: -8),
+            castButton.centerYAnchor.constraint(equalTo: close.centerYAnchor),
+            castButton.widthAnchor.constraint(equalToConstant: 44),
+            castButton.heightAnchor.constraint(equalToConstant: 44),
+            pipButton.trailingAnchor.constraint(equalTo: airplay.leadingAnchor, constant: -8),
+            pipButton.centerYAnchor.constraint(equalTo: close.centerYAnchor),
+            pipButton.widthAnchor.constraint(equalToConstant: 44),
+            pipButton.heightAnchor.constraint(equalToConstant: 44),
             airplay.trailingAnchor.constraint(equalTo: subsButton.leadingAnchor, constant: -8),
             airplay.centerYAnchor.constraint(equalTo: close.centerYAnchor),
             airplay.widthAnchor.constraint(equalToConstant: 44),
@@ -253,7 +320,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         scheduleBarChecks()
         // Na 10 seconden nog steeds geen beeld? Dan is deze bron kapot: sluiten zodat de app de volgende probeert
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-            guard let self = self, !self.everPlayed, !self.finished else { return }
+            guard let self = self, !self.everPlayed, !self.finished, !self.casting else { return }
             self.finish(ended: false)
         }
     }
@@ -426,6 +493,30 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     }
     @objc private func sliderEnd() { player.position = slider.value; seeking = false; scheduleHide() }
     @objc private func closeTapped() { finish(ended: false, user: true) }
+    @objc private func pipTapped() {
+        guard !finished else { return }
+        finished = true
+        let t = everPlayed ? seconds : 0
+        player.stop()
+        let back = presentingViewController
+        dismiss(animated: true) { [weak self] in
+            MainViewController.backToPortrait(back)
+            self?.onPip?(t)
+        }
+    }
+    @objc private func skipIntro() { introSkipped = true; introButton.isHidden = true; player.jumpForward(80) }
+    // Meteen door naar de volgende aflevering (de app start die na "afgelopen")
+    @objc private func playNext() { nextButton.isHidden = true; finish(ended: true) }
+
+    private func updateSeriesButtons() {
+        let len = length, t = seconds
+        introButton.isHidden = !(series && !introSkipped && t > 5 && t < 150)
+        let left = len - t
+        if !nextTitle.isEmpty && !nextCancelled && len > 60 && left <= 15 && left >= 0 {
+            nextButton.setTitle("Volgende aflevering · \(nextTitle) (\(Int(left.rounded(.up))))", for: .normal)
+            nextButton.isHidden = false
+        } else { nextButton.isHidden = true }
+    }
 
     @objc private func routeChanged() {
         DispatchQueue.main.async { [weak self] in
@@ -443,12 +534,47 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         }
     }
 
-    deinit { NotificationCenter.default.removeObserver(self) }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        if GCKCastContext.isSharedInstanceInitialized() { GCKCastContext.sharedInstance().sessionManager.remove(self) }
+    }
+
+    // ---- Chromecast: tv gekozen → daar verder op dezelfde plek, de telefoon pauzeert ----
+    private func castToTV(_ session: GCKCastSession) {
+        guard !finished, let client = session.remoteMediaClient else { return }
+        let ext = url.pathExtension.lowercased()
+        let builder = GCKMediaInformationBuilder(contentURL: url)
+        builder.streamType = live ? .live : .buffered
+        builder.contentType = ext == "m3u8" ? "application/x-mpegURL" : ext == "mkv" ? "video/x-matroska" : "video/mp4"
+        if ext == "m3u8" { builder.hlsSegmentFormat = .TS; builder.hlsVideoSegmentFormat = .MPEG2_TS }
+        let md = GCKMediaMetadata(metadataType: .movie)
+        md.setString(titleText, forKey: kGCKMetadataKeyTitle)
+        builder.metadata = md
+        let opts = GCKMediaLoadOptions()
+        opts.autoplay = true
+        opts.playPosition = live ? 0 : (everPlayed ? seconds : start)
+        client.loadMedia(builder.build(), with: opts)
+        casting = true
+        player.pause()
+        setPlayIcon(playing: false)
+        castLabel.text = "Speelt af op \(session.device.friendlyName ?? "je tv")"
+        castLabel.isHidden = false
+    }
+    func sessionManager(_ sessionManager: GCKSessionManager, didStart session: GCKCastSession) { castToTV(session) }
+    func sessionManager(_ sessionManager: GCKSessionManager, didResumeCastSession session: GCKCastSession) { castToTV(session) }
+    func sessionManager(_ sessionManager: GCKSessionManager, didEnd session: GCKCastSession, withError error: Error?) {
+        guard casting else { return }
+        casting = false
+        castLabel.isHidden = true
+        player.play(); setPlayIcon(playing: true)
+    }
 
     // Stond AirPlay al aan voordat je op afspelen tikte? Dan meteen via Apple's speler naar de tv
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         routeChanged()
+        // Al verbonden met een Chromecast? Dan meteen daarheen
+        if let s = GCKCastContext.sharedInstance().sessionManager.currentCastSession { castToTV(s) }
     }
 
     private func finish(ended: Bool, user: Bool = false) {
@@ -469,6 +595,8 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         switch player.state {
         case .buffering, .opening: if !player.isPlaying { spinner.startAnimating() }
         case .playing: spinner.stopAnimating(); everPlayed = true; fitVideo()
+        case .ended where casting, .error where casting:
+            break // speelt op de tv: de (gepauzeerde) telefoon-stream mag wegvallen
         case .ended:
             // Alleen echt "afgelopen" als we bij het einde zijn; valt de stream halverwege weg, dan onthouden waar je was
             finish(ended: length <= 0 || seconds >= length - 120)
@@ -547,6 +675,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         // Zodra de film loopt zijn de ondertitels bekend: Nederlands aan (of je eigen keuze), andere talen nooit
         if !subsApplied && player.time.intValue > 800 { subsApplied = true; applySubtitles() }
         if abs(seconds - lastProgress) >= 10 { lastProgress = seconds; onProgress?(seconds, length) }
+        if !live { updateSeriesButtons() }
         if seeking || live { return }
         slider.value = player.position
         let len = Double(player.media?.length.intValue ?? 0) / 1000

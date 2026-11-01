@@ -32,7 +32,11 @@ jobs:
         run: |
           npx cap add ios
           sed -i '' "s/# Add your Pods here/pod 'MobileVLCKit', '~> 3.6.0'/" ios/App/Podfile
-          grep -n "MobileVLCKit" ios/App/Podfile
+          # Chromecast (Google Cast SDK) heeft minstens iOS 14 nodig
+          perl -0pi -e "s/(pod 'MobileVLCKit'[^\n]*)/\$1\n  pod 'google-cast-sdk', '~> 4.8'/" ios/App/Podfile
+          sed -i '' "s/platform :ios, '13.0'/platform :ios, '14.0'/" ios/App/Podfile
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/g' ios/App/App.xcodeproj/project.pbxproj
+          grep -n "MobileVLCKit\|google-cast\|platform :ios" ios/App/Podfile
           npx cap sync ios
 
       - name: Eigen hoofdscherm en VLC-speler (thuisbalk verbergen, .mkv afspelen)
@@ -55,6 +59,12 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" $PL || true
           /usr/libexec/PlistBuddy -c "Add :LSApplicationQueriesSchemes array" $PL || true
           /usr/libexec/PlistBuddy -c "Add :LSApplicationQueriesSchemes:0 string vlc-x-callback" $PL || true
+          # Chromecast: tv's in je wifi mogen gezocht worden
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string _googlecast._tcp" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:1 string _CC1AD845._googlecast._tcp" $PL || true
+          /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string \"TV zoekt je Chromecast of tv in je wifi om beeld naar je tv te sturen.\"" $PL || true
+          /usr/libexec/PlistBuddy -c "Print :NSLocalNetworkUsageDescription" $PL || true
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName TV" $PL || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string TV" $PL
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.${{ github.run_number }}" $PL || true
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" $PL || true

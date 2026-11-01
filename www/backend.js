@@ -473,6 +473,37 @@ async function liveHome() {
   });
 }
 
+// ---------- Sport vandaag: alle wedstrijden, races en gevechten van vandaag op de Nederlandse sportzenders ----------
+// Uit de programmagids van de sportzenders (ESPN, Ziggo Sport, Viaplay, DAZN …); herhalingen en studio-praat eruit.
+const SPORT_TOPIC = /ESPN|ZIGGO|VOETBAL|FORMULE|RACING|DAZN|VIAPLAY|SPORT/i;
+const NO_SPORT = /herhaling|samenvatting|highlights|replay|\(r\)|magazine|studio|journaal|nieuws|teleshop|programma|gesloten|einde uitzending|to be announced|tba$|vandaag|dit was|weekend|legends|iconic|voorbeschouwing|nabeschouwing|preview|review|documentaire|podcast|^ziggo( sport)?( tv)?$|^espn\s*\d*$|^viaplay|^dazn$/i;
+let sportCache = null;
+async function sportToday() {
+  if (sportCache && Date.now() - sportCache.t < 10 * 60e3) return sportCache.data;
+  const home = await liveHome();
+  const chans = home.nl.filter(r => SPORT_TOPIC.test(r.title)).flatMap(r => r.items).slice(0, 36);
+  const now = Date.now() / 1000, end = new Date(); end.setHours(23, 59, 59, 999);
+  const out = [];
+  for (let i = 0; i < chans.length; i += 6) {
+    await Promise.all(chans.slice(i, i + 6).map(async ch => {
+      try {
+        const j = await api({ action: 'get_short_epg', stream_id: ch.id, limit: 16 });
+        for (const e of j.epg_listings || []) {
+          const s = Number(e.start_timestamp), en = Number(e.stop_timestamp), t = decodeB64(e.title).trim();
+          if (!t || en < now || s > end.getTime() / 1000 || en - s < 20 * 60 || NO_SPORT.test(t)) continue;
+          out.push({ s, e: en, t, d: decodeB64(e.description).slice(0, 160), ch: { id: ch.id, n: ch.n, i: ch.i, alt: ch.alt } });
+        }
+      } catch {}
+    }));
+  }
+  // Zelfde uitzending op meerdere zenders: één keer (eerste zender)
+  const seen = new Set();
+  const data = out.sort((a, b) => a.s - b.s || a.ch.n.localeCompare(b.ch.n))
+    .filter(x => { const k = x.t.toLowerCase() + '|' + x.s; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 80);
+  sportCache = { t: Date.now(), data };
+  return data;
+}
+
 // Ander land: kwaliteitscategorieën (8K/4K/HD/SD …) worden één rij "Zenders" met per zender de beste versie
 async function liveCountry(code) {
   const [all, cats] = await Promise.all([list('live'), categories('live')]);
@@ -905,6 +936,7 @@ async function route(url, init) {
   if (p === '/api/archive/day') return archiveDay(q.id, q.date);
   if (p === '/api/vodinfo') return cached('vi:' + q.id, () => api({ action: 'get_vod_info', vod_id: q.id }), true, 7 * 864e5);
   if (p === '/api/seriesinfo') return cached('si:' + q.id, () => api({ action: 'get_series_info', series_id: q.id }), true, 864e5);
+  if (p === '/api/sport') return sportToday();
   if (p === '/api/epg') {
     const j = await cached('epg:' + q.id, () => api({ action: 'get_short_epg', stream_id: q.id, limit: 3 }), false, 5 * 60e3);
     return (j.epg_listings || []).map(e => ({ t: decodeB64(e.title), d: decodeB64(e.description), s: Number(e.start_timestamp), e: Number(e.stop_timestamp) }));

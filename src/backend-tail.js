@@ -213,6 +213,7 @@ async function route(url, init) {
   if (p === '/api/archive/day') return archiveDay(q.id, q.date);
   if (p === '/api/vodinfo') return cached('vi:' + q.id, () => api({ action: 'get_vod_info', vod_id: q.id }), true, 7 * 864e5);
   if (p === '/api/seriesinfo') return cached('si:' + q.id, () => api({ action: 'get_series_info', series_id: q.id }), true, 864e5);
+  if (p === '/api/sport') return sportToday();
   if (p === '/api/epg') {
     const j = await cached('epg:' + q.id, () => api({ action: 'get_short_epg', stream_id: q.id, limit: 3 }), false, 5 * 60e3);
     return (j.epg_listings || []).map(e => ({ t: decodeB64(e.title), d: decodeB64(e.description), s: Number(e.start_timestamp), e: Number(e.stop_timestamp) }));
