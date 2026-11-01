@@ -364,6 +364,39 @@ async function seriesYears(ids, names = {}) {
   return out;
 }
 
+// ---------- Extra bij een film/serie: IMDb-score en "lijkt op" (via JustWatch), alleen titels die wij ook hebben ----------
+const JW_EXTRA = `query S($q: String!) { popularTitles(country: NL, first: 5, filter: { searchQuery: $q }) {
+  edges { node { objectType content(country: NL, language: "nl") { title originalTitle originalReleaseYear scoring { imdbScore imdbVotes } }
+    ... on Movie { similarTitlesV2(country: NL, first: 30) { edges { node { objectType content(country: NL, language: "nl") { title originalTitle } } } } }
+    ... on Show { similarTitlesV2(country: NL, first: 30) { edges { node { objectType content(country: NL, language: "nl") { title originalTitle } } } } }
+  } } } }`;
+async function titleExtra(type, name) {
+  const q = tidyTitle(name), year = +(String(name).match(/\((\d{4})/) || [])[1] || 0;
+  if (!q) return { imdb: 0, similar: [] };
+  const jw = await cached(`jwx:${type}:${popKey(name)}`, async () => {
+    const r = await fetch('https://apis.justwatch.com/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(10000), body: JSON.stringify({ query: JW_EXTRA, variables: { q } }) });
+    if (!r.ok) throw new Error('JustWatch ' + r.status);
+    const want = type === 'vod' ? 'MOVIE' : 'SHOW', key = popKey(q);
+    const hits = ((await r.json()).data?.popularTitles?.edges || []).map(e => e.node);
+    const same = n => n.objectType === want && (popKey(n.content?.title) === key || popKey(n.content?.originalTitle) === key);
+    const hit = hits.find(n => same(n) && (!year || Math.abs((n.content.originalReleaseYear || 0) - year) <= 1)) || hits.find(same);
+    if (!hit) return { imdb: 0, votes: 0, similar: [] };
+    return {
+      imdb: hit.content.scoring?.imdbScore || 0, votes: hit.content.scoring?.imdbVotes || 0,
+      similar: (hit.similarTitlesV2?.edges || []).map(e => e.node).filter(n => n.objectType === want).map(n => [n.content.title, n.content.originalTitle]),
+    };
+  }, true);
+  // "Lijkt op" koppelen aan onze eigen titels (Nederlandse lijst, populairste versie)
+  const pool = await nlPool(type);
+  const byKey = memo(pool, 'popkeys', () => { const m = new Map(); for (const x of pool) { const k = popKey(x.n); if (!m.has(k)) m.set(k, x); } return m; });
+  const own = popKey(name), similar = [];
+  for (const [t, o] of jw.similar || []) {
+    const x = byKey.get(popKey(t)) || byKey.get(popKey(o));
+    if (x && popKey(x.n) !== own && !similar.includes(x) && !isKid(type, x)) similar.push(x);
+  }
+  return { imdb: jw.imdb, votes: jw.votes, similar: similar.slice(0, 20) };
+}
+
 // Titels die de app meestuurt (om op te zoeken als de aanbieder zelf geen naam in de info heeft)
 const artNames = s => { try { const o = JSON.parse(s || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
 async function artFor(type, ids, names = {}) {
@@ -937,6 +970,7 @@ async function route(url, init) {
   if (p === '/api/vodinfo') return cached('vi:' + q.id, () => api({ action: 'get_vod_info', vod_id: q.id }), true, 7 * 864e5);
   if (p === '/api/seriesinfo') return cached('si:' + q.id, () => api({ action: 'get_series_info', series_id: q.id }), true, 864e5);
   if (p === '/api/sport') return sportToday();
+  if (p === '/api/extra') return titleExtra(q.type === 'series' ? 'series' : 'vod', q.name || '').catch(() => ({ imdb: 0, similar: [] }));
   if (p === '/api/epg') {
     const j = await cached('epg:' + q.id, () => api({ action: 'get_short_epg', stream_id: q.id, limit: 3 }), false, 5 * 60e3);
     return (j.epg_listings || []).map(e => ({ t: decodeB64(e.title), d: decodeB64(e.description), s: Number(e.start_timestamp), e: Number(e.stop_timestamp) }));

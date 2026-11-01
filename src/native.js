@@ -24,13 +24,17 @@ VLC?.addListener('exit', d => done(Number(d?.currentTime) || 0, false, Number(d?
 VLC?.addListener('ended', () => done(0, true));
 VLC?.addListener('airplay', d => { const c = cur; cur = null; c?.airplay?.(Number(d?.currentTime) || 0); });
 VLC?.addListener('pip', d => { const c = cur; cur = null; c?.pip?.(Number(d?.currentTime) || 0); });
+VLC?.addListener('zap', d => cur?.zap?.(Number(d?.dir) || 1));
+VLC?.addListener('reload', d => { const c = cur; cur = null; c?.reload?.(Number(d?.currentTime) || 0); });
 VLC?.addListener('progress', d => cur?.progress?.(Number(d?.currentTime) || 0, Number(d?.duration) || 0));
 
 async function withVLC(o) {
   // Naar de tv (AirPlay) gekozen in de speler: verder in Apple's speler op dezelfde plek, die stuurt het beeld door
   cur = { ...o, airplay: pos => AV ? withApple({ ...o, start: pos > 5 ? pos : o.start || 0 }) : null,
     // Beeld-in-beeld: verder in Apple's speler; daar het beeld-in-beeld-knopje (of veeg naar het beginscherm)
-    pip: pos => { if (!AV) return; toast('Tik op het beeld-in-beeld-knopje in de speler'); withApple({ ...o, start: pos > 5 ? pos : o.start || 0 }); } };
+    pip: pos => { if (!AV) return; toast('Tik op het beeld-in-beeld-knopje in de speler'); withApple({ ...o, start: pos > 5 ? pos : o.start || 0 }); },
+    // Andere ondertitelgrootte gekozen: dezelfde film op dezelfde plek opnieuw openen
+    reload: pos => withVLC({ ...o, start: o.live ? 0 : pos }) };
   try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live, series: !!o.series, nextTitle: o.nextTitle || '' }); }
   catch { cur = null; toast('Afspelen lukt niet'); }
 }
@@ -90,6 +94,17 @@ playLive = function (item, ctx) {
     const t0 = Date.now();
     play({
       url: src('live', sources[i], 'm3u8'), title: tidyName(item.n), sub: 'Live', live: true,
+      // Vegen in de speler: volgende/vorige zender uit dezelfde rij, zonder de speler te sluiten
+      zap: dir => {
+        const list = ctx && ctx.length > 1 ? ctx : null; if (!list) return;
+        let idx = list.findIndex(x => String(x.id) === String(item.id));
+        idx = (idx + dir + list.length) % list.length;
+        item = list[idx];
+        const k2 = favKey('live', item.id);
+        items.set(k2, { ...item, type: 'live' });
+        saveHist({ k: k2, type: 'live', id: item.id, n: item.n, i: item.i, alt: item.alt });
+        VLC.switchTo({ url: src('live', item.id, 'm3u8'), title: tidyName(item.n) }).catch(() => {});
+      },
       exit: (pos, dur, user) => { if (!user && pos < 0.5 && Date.now() - t0 < 40000 && i + 1 < sources.length) tryIdx(i + 1); },
     }, true); // Zenders altijd in VLC: Apple's speler haperde of gaf alleen het QuickTime-teken bij deze streams
   };

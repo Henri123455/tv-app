@@ -854,3 +854,20 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 
 /* Zoeken: suggesties toch onder elkaar laten doorlopen (niet zijwaarts schuiven) */
 .sug-group .sug-chips { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; }
+
+/* IMDb-score en trailer */
+.imdb { display: inline-flex; align-items: center; gap: 5px; margin-right: 10px; font-weight: 700; }
+.imdb b { background: #f5c518; color: #000; font-weight: 900; font-size: 11px; padding: 2px 5px; border-radius: 4px; letter-spacing: .02em; }
+#xTrailer svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 1.8; fill: none; }
+.trailer-ov { position: fixed; inset: 0; z-index: 400; background: rgba(0,0,0,.9); display: grid; place-items: center; padding: 20px; }
+.trailer-ov iframe { width: min(1100px, 100%); aspect-ratio: 16 / 9; border: 0; border-radius: 14px; background: #000; }
+.trailer-ov .sheet-close { position: fixed; top: max(16px, env(safe-area-inset-top)); right: 16px; }
+
+/* Speler-instellingen (pc) */
+#video::cue { font-size: calc(clamp(18px, 3.6vh, 44px) * var(--cue-scale, 1)); }
+.set-group { padding: 10px 6px 16px; }
+.set-group h4 { margin: 0 0 10px; font-size: 14px; font-weight: 700; }
+.set-group h4 small { color: var(--muted); font-weight: 500; }
+.set-group .seg { display: flex; }
+.set-group .seg button { flex: 1; }
+#pSettings svg { stroke-width: 1.8; }

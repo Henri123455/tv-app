@@ -721,6 +721,7 @@ async function renderBrowse(type) {
         fillShelf($('.shelf', el), type, r.items, { total: r.total, loadAll: () => getList(type, r.id) });
         holder.appendChild(el);
       }
+      addRecommendations(type, holder);
     };
     // Nieuwe films/series: eerst meteen de bewaarde rijen, daarna stil de verse lijst; die wordt getoond
     // zodra dat niet stoort (je zit bovenaan of op een ander tabblad). Ook later opnieuw, als de app lang openstaat.
@@ -1143,6 +1144,50 @@ function showSheet(html) {
 function hideSheet() { $('#sheet').hidden = true; document.body.style.overflow = ''; }
 $('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet' || e.target.closest('[data-close]')) closeTop(); });
 
+// "Omdat je … keek": vergelijkbare titels (JustWatch) bij je laatst bekeken films/series.
+// Niet bovenaan: ze komen na de eerste paar rijen (Bioscoop, Netflix, Videoland …).
+async function addRecommendations(type, holder) {
+  // Rijen worden soms opnieuw getekend (verse lijst): alleen de laatste ronde mag aanbevelingen toevoegen
+  const run = holder._recRun = (holder._recRun || 0) + 1;
+  const seen = new Set(hist().filter(h => h.type === type).map(h => String(h.id)));
+  const key = n => tidyName(n).replace(/\[[^\]]*\]/g, '').replace(YEAR_RE, '').trim().toLowerCase();
+  const base = hist().filter(h => h.type === type).filter((h, i, a) => a.findIndex(x => key(x.n) === key(h.n)) === i).slice(0, 2);
+  let pos = 3;
+  for (const h of base) {
+    try {
+      const x = await api(`/api/extra?type=${type}&name=${encodeURIComponent(h.n)}`);
+      const list = (x.similar || []).filter(s => !seen.has(String(s.id)));
+      if (run !== holder._recRun) return;
+      if (list.length < 4 || !holder.isConnected) continue;
+      const name = tidyName(h.n).replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim().replace(YEAR_RE, '');
+      const el = itemsRow(type, `Omdat je ${name} keek`, list);
+      el.classList.add('rec-row');
+      holder.insertBefore(el, holder.children[pos] || null);
+      pos += 3;
+    } catch {}
+  }
+}
+
+// IMDb-score (JustWatch) en trailer (YouTube, van de aanbieder) in het film/serie-scherm
+function sheetExtras(type, it, trailer) {
+  const card = $('#sheetCard');
+  const yt = String(trailer || '').trim().match(/^[\w-]{11}$/) ? String(trailer).trim() : (String(trailer || '').match(/(?:v=|youtu\.be\/|embed\/)([\w-]{11})/) || [])[1];
+  if (yt) {
+    $('.hero-actions', card)?.insertAdjacentHTML('beforeend', `<button class="btn glass" id="xTrailer"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="3"/><path d="M10.5 9.5l4 2.5-4 2.5z" fill="currentColor"/></svg>Trailer</button>`);
+    $('#xTrailer').onclick = () => {
+      const ov = document.createElement('div'); ov.className = 'trailer-ov';
+      ov.innerHTML = `<button class="round sheet-close" title="Sluiten"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button><iframe src="https://www.youtube-nocookie.com/embed/${yt}?autoplay=1&playsinline=1&rel=0" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`;
+      ov.onclick = e => { if (e.target === ov || e.target.closest('.sheet-close')) ov.remove(); };
+      document.body.appendChild(ov);
+    };
+  }
+  api(`/api/extra?type=${type}&name=${encodeURIComponent(it.n)}`).then(x => {
+    if (!x?.imdb || $('#sheetCard') !== card || !card.isConnected) return;
+    const meta = $('.sheet-hero .meta', card);
+    meta?.insertAdjacentHTML('afterbegin', `<span class="imdb" title="${x.votes ? x.votes.toLocaleString('nl-NL') + ' stemmen' : ''}"><b>IMDb</b> ${Number(x.imdb).toFixed(1)}</span>`);
+  }).catch(() => {});
+}
+
 // Knop "Bron": andere versies van dezelfde film/serie, pas geladen als je erop tikt (beste en Nederlands eerst)
 const SOURCE_ICON = '<svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>';
 function sourceButton(type, it, current, onPick) {
@@ -1196,6 +1241,7 @@ async function openMovie(it) {
       <div class="credits">${i.cast ? `<div><b>Met</b> ${esc(i.cast)}</div>` : ''}${i.director ? `<div><b>Regie</b> ${esc(i.director)}</div>` : ''}</div>
     </div>`;
   heroArt($('#sheetCard .sheet-hero'), backdrops, it.i || i.movie_image || i.cover_big, 700);
+  sheetExtras('vod', it, raw.youtube_trailer || i.youtube_trailer);
   const go = (start, v, rest) => playVod({ kind: 'movie', id: v ? v.id : it.id, ext: v ? v.e || 'mp4' : ext, hq: v ? !!v.hq : !!it.hq, start, duration: dur, title: tidyName(i.name || it.n), sub: (i.releasedate || '').slice(0, 4), favKey: k,
     item: v ? { ...it, hq: v.hq, alt: rest.map(x => ({ id: x.id, e: x.e })) } : it, hist: { k, type: 'vod', id: it.id, n: it.n, i: it.i } });
   $('#mPlay').onclick = () => go(resume);
@@ -1236,6 +1282,7 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
       ${seasons.length ? `<div class="seasons">${seasons.map(s => `<button class="chip" data-season="${esc(s)}">Seizoen ${esc(s)}</button>`).join('')}</div><div class="episodes"></div>` : '<p class="muted">Geen afleveringen gevonden.</p>'}
     </div>`;
   heroArt($('#sheetCard .sheet-hero'), backdrops, it.i || i.cover, 700);
+  sheetExtras('series', it, raw.youtube_trailer || i.youtube_trailer);
   // Melding bij nieuwe aflevering aan/uit (het huidige aantal afleveringen telt als "gezien")
   $('#sBell').onclick = () => {
     const on = !isFollowed(it.id), count = seasons.reduce((n, s) => n + (eps[s] || []).length, 0);
@@ -1389,6 +1436,29 @@ async function attach(src, { forceNative = false } = {}) {
     video.play().catch(() => playerEl.classList.add('paused'));
   }
 }
+// ================= Instellingen in de speler (pc): slaaptimer en ondertitelgrootte =================
+let sleepTimer = null, sleepUntil = 0;
+const SUB_SIZES = [['small', 'Klein', .8], ['normal', 'Normaal', 1], ['large', 'Groot', 1.3]];
+const applySubSize = () => document.documentElement.style.setProperty('--cue-scale', (SUB_SIZES.find(s => s[0] === store.get('subSize', 'normal')) || SUB_SIZES[1])[2]);
+applySubSize();
+function openSettings() {
+  const s = $('#pSide'); s.hidden = false; s.dataset.mode = 'settings';
+  $('#pSideTitle').textContent = 'Instellingen';
+  const left = sleepUntil ? Math.max(1, Math.round((sleepUntil - Date.now()) / 60000)) : 0;
+  const size = store.get('subSize', 'normal');
+  $('#pSideList').innerHTML = `<div class="set-group"><h4>Slaaptimer${left ? ` <small>(nog ${left} min)</small>` : ''}</h4><div class="seg">${[[0, 'Uit'], [15, '15'], [30, '30'], [60, '60'], [90, '90']].map(([m, l]) => `<button data-sleep="${m}" class="${(m === 0 && !sleepUntil) ? 'active' : ''}">${l}${m ? ' min' : ''}</button>`).join('')}</div></div>
+    <div class="set-group"><h4>Ondertitelgrootte</h4><div class="seg">${SUB_SIZES.map(([k, l]) => `<button data-size="${k}" class="${k === size ? 'active' : ''}">${l}</button>`).join('')}</div></div>`;
+  $$('[data-sleep]', s).forEach(b => b.onclick = () => {
+    clearTimeout(sleepTimer); sleepTimer = null; sleepUntil = 0;
+    const m = +b.dataset.sleep;
+    if (m) { sleepUntil = Date.now() + m * 60000; sleepTimer = setTimeout(() => { sleepUntil = 0; if (!playerEl.hidden) closeTop(); }, m * 60000); toast(`Slaaptimer: ${m} minuten`); }
+    else toast('Slaaptimer uit');
+    openSettings();
+  });
+  $$('[data-size]', s).forEach(b => b.onclick = () => { store.set('subSize', b.dataset.size); applySubSize(); openSettings(); });
+}
+$('#pSettings')?.addEventListener('click', e => { e.stopPropagation(); const s = $('#pSide'); if (!s.hidden && s.dataset.mode === 'settings') s.hidden = true; else openSettings(); });
+
 // ================= Ondertiteling (pc) =================
 // Alleen Nederlands en Engels. Bij omgezette films (.mkv) schrijft de pc de ondertitels mee weg terwijl de film
 // binnenkomt; de speler haalt ze steeds bij. Knop "CC" in de speler: Nederlands → Engels → uit (wordt onthouden).

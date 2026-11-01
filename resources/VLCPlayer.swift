@@ -15,7 +15,18 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "play", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTabBar", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "switchTo", returnType: CAPPluginReturnPromise),
     ]
+
+    // Zappen: andere zender in de speler die al open is
+    @objc func switchTo(_ call: CAPPluginCall) {
+        guard let s = call.getString("url"), let url = URL(string: s) else { call.reject("Geen geldig adres"); return }
+        let title = call.getString("title") ?? ""
+        DispatchQueue.main.async {
+            VLCPlayerViewController.current?.switchTo(url: url, title: title)
+            call.resolve()
+        }
+    }
 
     // Waar de tabbladen onderin staan (in punten), voor de laag die tikken tijdens het doorrollen opvangt
     @objc func setTabBar(_ call: CAPPluginCall) {
@@ -58,6 +69,9 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             vc.onPip = { [weak self] seconds in
                 self?.notifyListeners("pip", data: ["currentTime": seconds])
             }
+            vc.onZap = { [weak self] dir in self?.notifyListeners("zap", data: ["dir": dir]) }
+            vc.onReload = { [weak self] seconds in self?.notifyListeners("reload", data: ["currentTime": seconds]) }
+            VLCPlayerViewController.current = vc
             vc.modalPresentationStyle = .fullScreen
             self.bridge?.viewController?.present(vc, animated: true)
             call.resolve()
@@ -77,6 +91,80 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     private var nextCancelled = false
     var onAirPlay: ((Double) -> Void)?
     var onPip: ((Double) -> Void)?
+    var onZap: ((Int) -> Void)?       // -1 = vorige zender, 1 = volgende
+    var onReload: ((Double) -> Void)? // opnieuw openen op deze plek (bijv. na andere ondertitelgrootte)
+    static weak var current: VLCPlayerViewController?
+    private let titleLabel = UILabel()
+    private let settingsButton = UIButton(type: .system)
+    private var sleepTimer: Timer?
+    private var sleepUntil: Date?
+
+    // ---- Instellingen: slaaptimer en ondertitelgrootte ----
+    private func buildSettingsMenu() {
+        guard #available(iOS 14.0, *) else { return }
+        let left = sleepUntil.map { max(0, Int($0.timeIntervalSinceNow / 60)) }
+        let sleep = UIMenu(title: left != nil ? "Slaaptimer (nog \(left!) min)" : "Slaaptimer", image: UIImage(systemName: "moon"), children:
+            [("Uit", 0), ("15 minuten", 15), ("30 minuten", 30), ("60 minuten", 60), ("90 minuten", 90)].map { (name, min) in
+                UIAction(title: name, state: (min == 0 && sleepUntil == nil) ? .on : .off) { [weak self] _ in self?.setSleep(minutes: min) }
+            })
+        let cur = UserDefaults.standard.string(forKey: Self.subSizeKey) ?? "normal"
+        let size = UIMenu(title: "Ondertitelgrootte", image: UIImage(systemName: "textformat.size"), children:
+            [("Klein", "small"), ("Normaal", "normal"), ("Groot", "large")].map { (name, key) in
+                UIAction(title: name, state: cur == key ? .on : .off) { [weak self] _ in self?.setSubSize(key) }
+            })
+        settingsButton.menu = UIMenu(title: "Instellingen", children: [sleep, size])
+    }
+    private func setSleep(minutes: Int) {
+        sleepTimer?.invalidate(); sleepTimer = nil; sleepUntil = nil
+        if minutes > 0 {
+            sleepUntil = Date().addingTimeInterval(Double(minutes) * 60)
+            sleepTimer = Timer.scheduledTimer(withTimeInterval: Double(minutes) * 60, repeats: false) { [weak self] _ in
+                self?.finish(ended: false, user: true) // slaaptimer: stoppen (telt als zelf gesloten)
+            }
+            showHint("Slaaptimer: \(minutes) minuten")
+        } else { showHint("Slaaptimer uit") }
+        buildSettingsMenu()
+    }
+    private func setSubSize(_ key: String) {
+        guard key != (UserDefaults.standard.string(forKey: Self.subSizeKey) ?? "normal") else { return }
+        UserDefaults.standard.set(key, forKey: Self.subSizeKey)
+        // De lettergrootte zit vast in de speler: opnieuw openen op dezelfde plek
+        guard !finished else { return }
+        finished = true
+        let t = everPlayed ? seconds : start
+        player.stop()
+        closeQuickly { [weak self] in self?.onReload?(t) }
+    }
+    private func showHint(_ text: String) {
+        hint.text = "  \(text)  "
+        hint.alpha = 1
+        UIView.animate(withDuration: 0.4, delay: 1.5, options: []) { self.hint.alpha = 0 }
+    }
+
+    // ---- Zappen: naar links/rechts vegen tijdens live tv ----
+    @objc private func swiped(_ g: UISwipeGestureRecognizer) {
+        guard live, !casting else { return }
+        onZap?(g.direction == .left ? 1 : -1)
+    }
+    // Andere zender in dezelfde speler (geen sluiten/openen, dus snel)
+    func switchTo(url newURL: URL, title: String) {
+        guard !finished else { return }
+        titleLabel.text = title
+        showHint(title)
+        everPlayed = false; startChecked = false; subsApplied = false; lastBars = nil
+        if cropped { player.videoCropGeometry = nil; cropped = false; crop = (0, 0, 0, 0) }
+        spinner.startAnimating()
+        let media = VLCMedia(url: newURL)
+        media.addOption(":network-caching=3000")
+        media.addOption(":adaptive-logic=highest")
+        player.media = media
+        player.play()
+        scheduleBarChecks()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self = self, !self.everPlayed, !self.finished, !self.casting else { return }
+            self.showHint("Deze zender werkt nu niet")
+        }
+    }
     private let castLabel = UILabel()
     private var casting = false
     private let airplay = AVRoutePickerView()
@@ -90,9 +178,12 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     // Ondertitels zoals Netflix/UHF: groot, wit en vet, met een stevige zwarte rand en schaduw (leesbaar op elk beeld),
     // geen balk erachter.
     // Beeld: hardware-decodering en het volledige deblocking-filter (scherper, geen blokjes).
+    // Ondertitelgrootte (instellingen-knop): kleiner getal = grotere letters
+    static let subSizeKey = "tvSubSize" // "small", "normal" (standaard) of "large"
+    static var subSizeValue: Int { ["small": 16, "large": 10][UserDefaults.standard.string(forKey: subSizeKey) ?? ""] ?? 13 }
     private let player: VLCMediaPlayer = VLCMediaPlayer(options: [
         "--freetype-font=Helvetica Neue",
-        "--freetype-rel-fontsize=12",
+        "--freetype-rel-fontsize=\(VLCPlayerViewController.subSizeValue)",
         "--freetype-bold",
         "--freetype-color=16777215",
         "--freetype-opacity=255",
@@ -163,7 +254,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         playButton.tintColor = .white
         playButton.addTarget(self, action: #selector(togglePlay), for: .touchUpInside)
 
-        let title = UILabel()
+        let title = titleLabel
         title.text = titleText
         title.textColor = .white
         title.font = .boldSystemFont(ofSize: 17)
@@ -222,7 +313,21 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         GCKCastContext.sharedInstance().sessionManager.add(self)
         let pipButton = symbolButton("pip.enter", size: 20, action: #selector(pipTapped))
         pipButton.isHidden = !AVPictureInPictureController.isPictureInPictureSupported()
-        for v in [close, back, fwd, playButton, title, timeLabel, slider, subsButton, airplay, pipButton] as [UIView] {
+        // Instellingen (tandwiel): slaaptimer en ondertitelgrootte
+        settingsButton.setImage(UIImage(systemName: "gearshape", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)), for: .normal)
+        settingsButton.tintColor = .white
+        if #available(iOS 14.0, *) { settingsButton.showsMenuAsPrimaryAction = true }
+        buildSettingsMenu()
+        // Zenders: naar links/rechts vegen = volgende/vorige zender (handig als je de telefoon liggend houdt)
+        if live {
+            for dir in [UISwipeGestureRecognizer.Direction.left, .right] {
+                let sw = UISwipeGestureRecognizer(target: self, action: #selector(swiped(_:)))
+                sw.direction = dir
+                sw.delegate = self
+                view.addGestureRecognizer(sw)
+            }
+        }
+        for v in [close, back, fwd, playButton, title, timeLabel, slider, subsButton, airplay, pipButton, settingsButton] as [UIView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             controls.addSubview(v)
         }
@@ -270,7 +375,11 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             airplay.centerYAnchor.constraint(equalTo: close.centerYAnchor),
             airplay.widthAnchor.constraint(equalToConstant: 44),
             airplay.heightAnchor.constraint(equalToConstant: 44),
-            subsButton.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -16),
+            settingsButton.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -16),
+            settingsButton.centerYAnchor.constraint(equalTo: close.centerYAnchor),
+            settingsButton.widthAnchor.constraint(equalToConstant: 44),
+            settingsButton.heightAnchor.constraint(equalToConstant: 44),
+            subsButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -8),
             subsButton.centerYAnchor.constraint(equalTo: close.centerYAnchor),
             subsButton.widthAnchor.constraint(equalToConstant: 44),
             subsButton.heightAnchor.constraint(equalToConstant: 44),
@@ -600,6 +709,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         if finished { return }
         finished = true
         hideTimer?.invalidate()
+        sleepTimer?.invalidate()
         let t = everPlayed ? seconds : 0
         let len = length
         player.stop()
