@@ -41,7 +41,7 @@ class MainViewController: CAPBridgeViewController {
         }
         // De webpagina opnieuw laten schikken (vaste balken op de juiste plek)
         if let web = (vc as? CAPBridgeViewController)?.webView {
-            web.evaluateJavaScript("window.scrollTo(window.scrollX, window.scrollY); window.dispatchEvent(new Event('resize'));", completionHandler: nil)
+            web.evaluateJavaScript("requestAnimationFrame(() => window.scrollTo(window.scrollX, window.scrollY));", completionHandler: nil)
         }
     }
 }

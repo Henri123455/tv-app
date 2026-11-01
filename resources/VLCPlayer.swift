@@ -498,10 +498,18 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         finished = true
         let t = everPlayed ? seconds : 0
         player.stop()
+        closeQuickly { [weak self] in self?.onPip?(t) }
+    }
+
+    // Sluiten en meteen terugdraaien, zonder draai-animatie: tijdens die animatie moest de hele app-pagina
+    // steeds opnieuw worden opgebouwd, dat gaf haperingen. Nu staat hij in één keer goed.
+    private func closeQuickly(_ then: @escaping () -> Void) {
         let back = presentingViewController
-        dismiss(animated: true) { [weak self] in
+        UIView.setAnimationsEnabled(false)
+        dismiss(animated: false) {
             MainViewController.backToPortrait(back)
-            self?.onPip?(t)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { UIView.setAnimationsEnabled(true) }
+            then()
         }
     }
     @objc private func skipIntro() { introSkipped = true; introButton.isHidden = true; player.jumpForward(80) }
@@ -526,11 +534,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             self.finished = true
             let t = self.everPlayed ? self.seconds : 0
             self.player.stop()
-            let back = self.presentingViewController
-            self.dismiss(animated: true) { [weak self] in
-                MainViewController.backToPortrait(back)
-                self?.onAirPlay?(t)
-            }
+            self.closeQuickly { [weak self] in self?.onAirPlay?(t) }
         }
     }
 
@@ -584,11 +588,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         let t = everPlayed ? seconds : 0
         let len = length
         player.stop()
-        let back = presentingViewController
-        dismiss(animated: true) { [weak self] in
-            MainViewController.backToPortrait(back)
-            self?.onExit?(t, ended, len, user)
-        }
+        closeQuickly { [weak self] in self?.onExit?(t, ended, len, user) }
     }
 
     func mediaPlayerStateChanged(_ aNotification: Notification) {
