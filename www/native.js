@@ -15,7 +15,12 @@ const APPLE_EXT = /^(mp4|m4v|mov|m3u8)$/i;
 
 let cur = null;
 // user = je hebt zelf gesloten (kruisje/Gereed): dan stoppen, nooit "kapot" denken en een andere bron starten
-const done = (pos, ended, dur, user) => { const c = cur; cur = null; if (!c) return; if (ended) c.ended?.(); else c.exit?.(pos, dur, user); };
+const done = (pos, ended, dur, user) => {
+  const c = cur; cur = null; if (!c) return;
+  if (ended) c.ended?.(); else c.exit?.(pos, dur, user);
+  // Schermen-teller linksboven bijwerken (de aanbieder laat een gestopte verbinding pas na even los)
+  for (const t of [3000, 10000, 25000, 45000]) setTimeout(() => typeof updateConns === 'function' && updateConns(), t);
+};
 // Apple's speler: was de film geladen (klaar om te spelen)? Dan is sluiten altijd jouw keuze
 AV?.addListener('jeepCapVideoPlayerReady', () => { if (cur) cur.ready = true; if (cur?.start > 5) AV.setCurrentTime({ playerId: 'fullscreen', seektime: cur.start }).catch(() => {}); });
 AV?.addListener('jeepCapVideoPlayerExit', d => done(Number(d?.currentTime) || 0, false, 0, !!cur?.ready));

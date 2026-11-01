@@ -1393,7 +1393,7 @@ function closePlayer() {
   // Zelf gesloten: alles wat nog liep (andere bron zoeken, opnieuw proberen) stopt hier, er start niets meer vanzelf
   P.token = (P.token || 0) + 1; P.src = null; P.stages = null; P.opts = null;
   hideNextUp(); toggleIntro(false);
-  setTimeout(updateConns, 4000); // de aanbieder heeft even nodig om je verbinding los te laten
+  for (const t of [3000, 10000, 25000, 45000]) setTimeout(updateConns, t); // de aanbieder laat een gestopte verbinding pas na even los
   destroyEngines();
   stopSubs();
   playerEl.hidden = true; $('#pSide').hidden = true; document.body.style.overflow = '';
@@ -2143,7 +2143,7 @@ async function updateConns() {
     $('span', pill).textContent = c.active === 0 ? `Niemand kijkt · ${c.max} schermen vrij` : `${c.active} van ${c.max} schermen kijken${c.active >= c.max ? ' · vol' : ''}`;
   } catch { pill.hidden = true; } finally { connBusy = false; }
 }
-setInterval(updateConns, 60000);
+setInterval(updateConns, 15000); // vaak verversen: de aanbieder telt een gestopte verbinding nog even mee
 document.addEventListener('visibilitychange', () => { if (!document.hidden) updateConns(); });
 
 // ================= Nieuw voor jou =================
