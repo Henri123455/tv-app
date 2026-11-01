@@ -365,6 +365,7 @@ const IS_APP = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.is
 if (IS_APP) {
   document.querySelector('meta[name=viewport]')?.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
   document.documentElement.style.touchAction = 'manipulation';
+  document.documentElement.classList.add('is-app'); // o.a. geen aantallen achter de kopjes
   document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
 }
 const PERF = IS_APP ? (store.get('perf') || 'normal') : 'fast';
@@ -589,6 +590,18 @@ function topTen(type) {
     if (!list.length) return el.remove();
     shelf._list = list; shelf._type = type;
     shelf.innerHTML = list.map((x, n) => `<div class="ranked ${type === 'live' ? 'live' : 'poster'}"><span class="rank-num">${n + 1}</span>${cardHTML(type, x)}</div>`).join('');
+    // Zenders: onder de naam wat er nu op is (rustig na elkaar opgehaald)
+    if (type === 'live') setTimeout(async () => {
+      for (const card of $$('.card[data-k]', shelf)) {
+        if (!card.isConnected) return;
+        const id = card.dataset.k.split(':')[1];
+        try {
+          const e = await api('/api/epg?id=' + id);
+          const now = e.find(x => x.s * 1000 <= Date.now() && x.e * 1000 > Date.now());
+          if (now && !$('.now-t', card)) card.insertAdjacentHTML('beforeend', `<div class="now-t">${esc(now.t)}</div>`);
+        } catch {}
+      }
+    }, 1500);
   }
   return el;
 }
@@ -1183,6 +1196,7 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
       <div class="hero-actions">
         ${h?.ep ? `<button class="btn primary" id="sResume">${PLAY_ICON}Verder: S${h.ep.season} A${h.ep.num}</button>` : seasons.length ? `<button class="btn primary" id="sFirst">${PLAY_ICON}Afspelen</button>` : ''}
         <button class="btn glass ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}">${HEART}Mijn lijst</button>
+        <button class="btn glass bell-btn ${isFollowed(it.id) ? 'on' : ''}" id="sBell" title="Melding bij een nieuwe aflevering">${BELL_ICON}<span>${isFollowed(it.id) ? 'Melding aan' : 'Melding'}</span></button>
         <button class="round" id="mSource" title="Andere bron">${SOURCE_ICON}</button>
       </div>
       <div class="versions" hidden></div>
@@ -1190,6 +1204,14 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
       ${seasons.length ? `<div class="seasons">${seasons.map(s => `<button class="chip" data-season="${esc(s)}">Seizoen ${esc(s)}</button>`).join('')}</div><div class="episodes"></div>` : '<p class="muted">Geen afleveringen gevonden.</p>'}
     </div>`;
   heroArt($('#sheetCard .sheet-hero'), backdrops, it.i || i.cover, 700);
+  // Melding bij nieuwe aflevering aan/uit (het huidige aantal afleveringen telt als "gezien")
+  $('#sBell').onclick = () => {
+    const on = !isFollowed(it.id), count = seasons.reduce((n, s) => n + (eps[s] || []).length, 0);
+    setFollowSeries(it, on, count);
+    $('#sBell').classList.toggle('on', on);
+    $('#sBell span').textContent = on ? 'Melding aan' : 'Melding';
+    toast(on ? 'Je krijgt een melding bij een nieuwe aflevering' : 'Geen meldingen meer voor deze serie');
+  };
   sourceButton('series', it, () => src ? src.id : it.id, (v, rest) =>
     openSeries({ ...it, alt: rest.map(x => ({ id: x.id, e: x.e })) }, String(v.id) === String(it.id) ? null : v));
   const flat = seasons.flatMap(s => eps[s].map(e => ({ ...e, season: s })));
@@ -1956,7 +1978,16 @@ document.addEventListener('scroll', e => {
 // en titels die je via Zoeken "volgt" (bijv. een bokswedstrijd die nog niet beschikbaar is) zodra ze er zijn.
 // Gecontroleerd bij het openen van de app en daarna af en toe; per profiel bewaard.
 const watchKey = () => profileKey('watch');
-const watchData = () => Object.assign({ eps: {}, terms: [], news: [] }, store.get(watchKey(), {}));
+const watchData = () => Object.assign({ eps: {}, terms: [], news: [], series: {} }, store.get(watchKey(), {}));
+const BELL_ICON = '<svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>';
+// Series waarvoor je zelf "Melding" hebt aangezet (knop bij de serie)
+const isFollowed = id => !!watchData().series[id];
+function setFollowSeries(it, on, count) {
+  const w = watchData();
+  if (on) { w.series[it.id] = { id: it.id, n: it.n, i: it.i }; w.eps[it.id] = count; }
+  else delete w.series[it.id];
+  saveWatch(w);
+}
 const saveWatch = w => { w.news = w.news.slice(0, 40); store.set(watchKey(), w); updateBell(w); };
 function updateBell(w = watchData()) {
   const n = w.news.filter(x => !x.read).length;
@@ -1983,9 +2014,9 @@ async function checkNews() {
   const w = watchData();
   let added = 0;
   try {
-    // 1. Series die je volgt: telt het aantal afleveringen; meer dan vorige keer = nieuwe aflevering
-    const follow = [...S.favs.filter(f => f.type === 'series'), ...hist().filter(h => h.type === 'series')]
-      .filter((x, i, a) => a.findIndex(y => String(y.id) === String(x.id)) === i).slice(0, 15);
+    // 1. Series met "Melding" aan (en die in Mijn lijst): meer afleveringen dan vorige keer = nieuwe aflevering
+    const follow = [...Object.values(w.series), ...S.favs.filter(f => f.type === 'series')]
+      .filter((x, i, a) => a.findIndex(y => String(y.id) === String(x.id)) === i).slice(0, 25);
     for (const s of follow) {
       try {
         const info = await api(`/api/seriesinfo?id=${s.id}`);

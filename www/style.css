@@ -814,3 +814,25 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 .sport-logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
 [data-theme="light"] .section-title .sport-pill { background: #fff; box-shadow: 0 0 0 .5px rgba(0,0,0,.1), 0 2px 8px rgba(0,0,0,.06); }
 @media (max-width: 760px) { .section-title .sport-pill { font-size: 12.5px; padding: 6px 11px; } }
+
+/* ---------- Top 10 zenders: mooier (gloed achter het logo, nummer met kleurverloop, wat er nu op is) ---------- */
+.top10 .ranked.live .card .art { background: radial-gradient(120% 140% at 30% 0%, rgba(120,140,255,.35), rgba(255,255,255,.04) 55%), linear-gradient(160deg, #2a2d3a, #15161c);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), inset 0 0 0 1px rgba(255,255,255,.08), 0 10px 26px rgba(0,0,0,.45); }
+.top10 .ranked.live .card .art img { filter: drop-shadow(0 6px 14px rgba(0,0,0,.45)); }
+.top10 .ranked:nth-child(1) .card .art { background: radial-gradient(120% 140% at 30% 0%, rgba(255,214,10,.35), rgba(255,255,255,.04) 55%), linear-gradient(160deg, #3a3322, #17150f); }
+.top10 .ranked:nth-child(2) .card .art { background: radial-gradient(120% 140% at 30% 0%, rgba(220,225,235,.32), rgba(255,255,255,.04) 55%), linear-gradient(160deg, #31333a, #16171b); }
+.top10 .ranked:nth-child(3) .card .art { background: radial-gradient(120% 140% at 30% 0%, rgba(214,140,80,.34), rgba(255,255,255,.04) 55%), linear-gradient(160deg, #382b22, #17120f); }
+.top10 .ranked.live .rank-num { background: linear-gradient(180deg, #fff, rgba(255,255,255,.12)); -webkit-background-clip: text; background-clip: text; }
+.top10 .ranked:nth-child(1) .rank-num { background: linear-gradient(180deg, #ffe17a, rgba(255,214,10,.15)); -webkit-background-clip: text; background-clip: text; }
+.top10 .ranked:nth-child(2) .rank-num { background: linear-gradient(180deg, #f2f4f8, rgba(220,225,235,.15)); -webkit-background-clip: text; background-clip: text; }
+.top10 .ranked:nth-child(3) .rank-num { background: linear-gradient(180deg, #f0b07a, rgba(214,140,80,.15)); -webkit-background-clip: text; background-clip: text; }
+.top10 .card .now-t { font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+[data-theme="light"] .top10 .ranked.live .card .art { background: linear-gradient(160deg, #fff, #eceef3); box-shadow: 0 0 0 .5px rgba(0,0,0,.08), 0 8px 20px rgba(0,0,0,.08); }
+
+/* ---------- Bel-knop bij een serie ---------- */
+.bell-btn svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 2; fill: none; }
+.bell-btn.on { background: #fff; color: #000; }
+.bell-btn.on svg { fill: currentColor; }
+
+/* ---------- Telefoon-app: geen aantallen achter de kopjes ---------- */
+.is-app .count, .is-app .row-head .count, .is-app .section-sub .count { display: none !important; }
