@@ -550,24 +550,43 @@ const nowPlaying = (id, el) => api('/api/epg?id=' + id).then(e => {
 }).catch(() => {});
 
 // ================= Pagina's =================
+const RENDER = { live: renderLive, vod: renderBrowse, series: renderBrowse, archive: renderArchive, mine: renderMine, search: renderSearch };
+// Een pagina aanmaken en opbouwen (zichtbaar of alvast verborgen op de achtergrond)
+function buildPage(tab, visible) {
+  S.pages[tab]?.remove();
+  const el = document.createElement('div'); el.className = 'page'; el.hidden = !visible; main.appendChild(el); S.pages[tab] = el;
+  // Eerst het tabblad meteen laten zien (met laadplaatjes), dan pas opbouwen: één tik is genoeg
+  if (tab === 'vod' || tab === 'series') el.innerHTML = `<header class="hero flat"></header><div class="row"><div class="row-wrap"><div class="shelf">${skeletons(tab, 6)}</div></div></div>`;
+  const render = () => Promise.resolve(RENDER[tab](tab)).finally(() => visible && document.dispatchEvent(new Event('tv-ready')));
+  if (visible && TOUCH && tab !== 'search') requestAnimationFrame(() => setTimeout(() => { if (el.isConnected) render(); }, 0)); else render();
+  return el;
+}
 function setTab(tab) {
-  if (S.pages[S.tab]) S.pages[S.tab]._scroll = scrollY;
   S.tab = tab;
   $$('.nav-pill button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   closeGrid(true);
   for (const [k, el] of Object.entries(S.pages)) el.hidden = k !== tab;
   S.pages[tab]?._showPending?.();
-  if (!S.pages[tab] || tab === 'mine') {
-    S.pages[tab]?.remove();
-    const el = document.createElement('div'); el.className = 'page'; main.appendChild(el); S.pages[tab] = el;
-    // Eerst het tabblad meteen laten zien (met laadplaatjes), dan pas opbouwen: één tik is genoeg
-    if (tab === 'vod' || tab === 'series') el.innerHTML = `<header class="hero flat"></header><div class="row"><div class="row-wrap"><div class="shelf">${skeletons(tab, 6)}</div></div></div>`;
-    const render = () => Promise.resolve(({ live: renderLive, vod: renderBrowse, series: renderBrowse, archive: renderArchive, mine: renderMine, search: renderSearch })[tab](tab))
-      .finally(() => document.dispatchEvent(new Event('tv-ready')));
-    if (TOUCH && tab !== 'search') requestAnimationFrame(() => setTimeout(() => { if (el.isConnected) render(); }, 0)); else render();
-  }
-  window.scrollTo(0, S.pages[tab]._scroll || 0);
+  if (!S.pages[tab] || tab === 'mine') buildPage(tab, true);
+  // Elk tabblad begint weer "schoon": bovenaan, en alle rijen weer aan het begin
+  window.scrollTo(0, 0);
+  for (const s of S.pages[tab].querySelectorAll('.shelf')) if (s.scrollLeft) s.scrollLeft = 0;
   store.set('tab', tab);
+  prepareTabs();
+}
+// Films en Series alvast op de achtergrond klaarzetten (als je even niets doet), zodat wisselen meteen gaat.
+// Trage telefoon: niet, om haperingen te voorkomen.
+let prepTimer;
+function prepareTabs() {
+  if (PERF === 'slow') return;
+  clearTimeout(prepTimer);
+  prepTimer = setTimeout(function step() {
+    if (performance.now() - (window.__lastInput || 0) < 2500 || !playerEl.hidden) { prepTimer = setTimeout(step, 2000); return; }
+    const next = ['vod', 'series'].find(t => !S.pages[t]);
+    if (!next) return;
+    buildPage(next, false);
+    prepTimer = setTimeout(step, IS_APP ? 6000 : 3000);
+  }, IS_APP ? 8000 : 4000);
 }
 
 function topRows(type, box) {
