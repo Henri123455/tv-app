@@ -361,6 +361,12 @@ document.addEventListener('touchstart', prefetchFrom, { passive: true });
 // Telefoon-app: de app meet hoe snel dit toestel is (zie measurePerf) en laadt daarnaar:
 // trage telefoon = kleinere happen en minder vooruit laden. De pc-app laadt altijd op volle snelheid.
 const IS_APP = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
+// Telefoon-app: niet kunnen in- of uitzoomen (ook niet met dubbeltikken)
+if (IS_APP) {
+  document.querySelector('meta[name=viewport]')?.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+  document.documentElement.style.touchAction = 'manipulation';
+  document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
+}
 const PERF = IS_APP ? (store.get('perf') || 'normal') : 'fast';
 const TUNE = { slow: { chunk: 8, rows: '700px 0px', search: [4, 6] }, normal: { chunk: 12, rows: '1200px 0px', search: [6, 9] }, fast: { chunk: 30, rows: '1600px 0px', search: [8, 12] } }[PERF];
 const CHUNK = matchMedia('(hover: none) and (pointer: coarse)').matches ? Math.min(TUNE.chunk, 12) : TUNE.chunk;
@@ -565,7 +571,8 @@ function setTab(tab) {
 
 function topRows(type, box) {
   const h = hist().filter(x => x.type === type);
-  if (h.length) box.appendChild(itemsRow(type, type === 'live' ? 'Recent bekeken' : 'Verder kijken', h, { progressOf: x => x.dur ? x.pos / x.dur : 0 }));
+  // Telefoon-app: bij Live TV geen "Recent bekeken" (wel bij films en series: "Verder kijken")
+  if (h.length && !(IS_APP && type === 'live')) box.appendChild(itemsRow(type, type === 'live' ? 'Recent bekeken' : 'Verder kijken', h, { progressOf: x => x.dur ? x.pos / x.dur : 0 }));
   const f = S.favs.filter(x => x.type === type);
   if (f.length) box.appendChild(itemsRow(type, 'Mijn lijst', f));
   box.appendChild(topTen(type));

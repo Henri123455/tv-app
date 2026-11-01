@@ -21,6 +21,13 @@ class MainViewController: CAPBridgeViewController {
             GCKCastContext.setSharedInstanceWith(options)
         }
         bridge?.registerPluginInstance(VLCPlayerPlugin())
+        // Niet in- of uitzoomen (knijpen of dubbeltikken): de app blijft altijd op ware grootte
+        if let sv = webView?.scrollView {
+            sv.pinchGestureRecognizer?.isEnabled = false
+            sv.minimumZoomScale = 1
+            sv.maximumZoomScale = 1
+            sv.bouncesZoom = false
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
