@@ -871,3 +871,18 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 .set-group .seg { display: flex; }
 .set-group .seg button { flex: 1; }
 #pSettings svg { stroke-width: 1.8; }
+
+/* ---------- Schermen in gebruik (linksboven) ---------- */
+.conn-pill { pointer-events: auto; position: absolute; left: var(--gutter); top: 22px; display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; color: var(--text); background: var(--lg-solid), rgba(20,20,24,.55); box-shadow: var(--lg-edge); transition: opacity .2s; }
+.conn-pill i { width: 8px; height: 8px; border-radius: 50%; background: #ff9f0a; box-shadow: 0 0 8px rgba(255,159,10,.7); }
+.conn-pill.free i { background: #30d158; box-shadow: 0 0 8px rgba(48,209,88,.7); }
+.conn-pill.full i { background: #ff453a; box-shadow: 0 0 8px rgba(255,69,58,.7); }
+@media (max-width: 760px) { .conn-pill { position: fixed; top: max(14px, env(safe-area-inset-top)); left: 14px; font-size: 12px; padding: 6px 11px; } .nav.scrolled .conn-pill { opacity: 0; pointer-events: none; } }
+[data-theme="light"] .conn-pill { background: #fff; box-shadow: 0 0 0 .5px rgba(0,0,0,.1), 0 2px 8px rgba(0,0,0,.06); }
+
+/* Herinnering: app stopt bijna (iPhone, 7 dagen) */
+.expiry-bar { position: fixed; z-index: 250; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 56px); display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 14px;
+  background: rgba(255,159,10,.95); color: #1d1300; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+.expiry-bar span { flex: 1; }
+.expiry-bar button { font-size: 22px; line-height: 1; padding: 0 4px; color: inherit; }

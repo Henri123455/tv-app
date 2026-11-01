@@ -26,7 +26,7 @@ jobs:
         run: npm install
 
       - name: Repo-naam in de app (voor de Netflix Top 10 Nederland)
-        run: echo "window.TV_REPO = '${{ github.repository }}';" > www/build-info.js
+        run: echo "window.TV_REPO = '${{ github.repository }}'; window.TV_BUILD = '1.${{ github.run_number }}';" > www/build-info.js
 
       - name: iPhone-project maken (met de VLC-speler)
         run: |

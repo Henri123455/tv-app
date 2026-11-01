@@ -573,6 +573,7 @@ function setTab(tab) {
   for (const s of S.pages[tab].querySelectorAll('.shelf')) if (s.scrollLeft) s.scrollLeft = 0;
   store.set('tab', tab);
   prepareTabs();
+  if ($('#connPill')) { if (tab === 'live') updateConns(); else $('#connPill').hidden = true; }
 }
 // Films en Series alvast op de achtergrond klaarzetten (als je even niets doet), zodat wisselen meteen gaat.
 // Trage telefoon: niet, om haperingen te voorkomen.
@@ -1168,6 +1169,14 @@ async function addRecommendations(type, holder) {
   }
 }
 
+// "Op tv": de film/aflevering starten en meteen de Chromecast-keuze openen (verder op de tv waar je was)
+let castNext = false;
+function addTvButton(play) {
+  const actions = $('#sheetCard .hero-actions'); if (!actions || $('#xTv')) return;
+  actions.insertAdjacentHTML('beforeend', `<button class="btn glass" id="xTv"><svg viewBox="0 0 24 24"><path d="M3 16a5 5 0 0 1 5 5M3 12a9 9 0 0 1 9 9M3 8V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/><path d="M3 20h.01"/></svg>Op tv</button>`);
+  $('#xTv').onclick = () => { castNext = true; play(); };
+}
+
 // IMDb-score (JustWatch) en trailer (YouTube, van de aanbieder) in het film/serie-scherm
 function sheetExtras(type, it, trailer) {
   const card = $('#sheetCard');
@@ -1246,6 +1255,7 @@ async function openMovie(it) {
     item: v ? { ...it, hq: v.hq, alt: rest.map(x => ({ id: x.id, e: x.e })) } : it, hist: { k, type: 'vod', id: it.id, n: it.n, i: it.i } });
   $('#mPlay').onclick = () => go(resume);
   $('#mRestart') && ($('#mRestart').onclick = () => go(0));
+  addTvButton(() => go(resume));
   sourceButton('vod', it, () => it.id, (v, rest) => go(resume, v, rest));
 }
 
@@ -1321,6 +1331,7 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
     const done = h.dur > 0 && h.pos > h.dur - 120;
     if (done && flat[idx + 1]) playEp(flat[idx + 1], 0); else playEp(e, !done && h.pos > 30 ? h.pos : 0);
   });
+  if (flat.length) addTvButton(() => ($('#sResume') || $('#sFirst'))?.click());
 }
 
 // ================= Speler =================
@@ -1382,6 +1393,7 @@ function closePlayer() {
   // Zelf gesloten: alles wat nog liep (andere bron zoeken, opnieuw proberen) stopt hier, er start niets meer vanzelf
   P.token = (P.token || 0) + 1; P.src = null; P.stages = null; P.opts = null;
   hideNextUp(); toggleIntro(false);
+  setTimeout(updateConns, 4000); // de aanbieder heeft even nodig om je verbinding los te laten
   destroyEngines();
   stopSubs();
   playerEl.hidden = true; $('#pSide').hidden = true; document.body.style.overflow = '';
@@ -1700,6 +1712,8 @@ function playVod(o) {
     return;
   }
   seekVod(o.start || 0, true);
+  // "Op tv" gekozen: meteen de Chromecast-keuze (binnen de tik, anders staat Chrome het niet toe)
+  if (castNext) { castNext = false; setTimeout(() => chromecast().then(ok => ok || castHelp()), 300); }
 }
 function seekVod(t, first) {
   const o = P.opts; if (!o) return;
@@ -2097,6 +2111,41 @@ document.addEventListener('scroll', e => {
   if (s !== navScrolled) { navScrolled = s; $('#nav').classList.toggle('scrolled', s); }
 }, { passive: true, capture: true });
 
+// ================= Herinnering: de iPhone-app stopt 7 dagen na het installeren =================
+// Gratis Apple ID = 7 dagen. Vanaf dag 6 een rustige melding bovenin, zodat je op tijd opnieuw laat installeren.
+function expiryReminder() {
+  if (!IS_APP || !window.TV_BUILD) return;
+  const key = 'installed:' + window.TV_BUILD;
+  let first = store.get(key, 0);
+  if (!first) { first = Date.now(); store.set(key, first); }
+  const left = 7 - (Date.now() - first) / 864e5;
+  if (left > 1.5 || store.get('expiryHidden', '') === new Date().toDateString()) return;
+  const b = document.createElement('div'); b.className = 'expiry-bar';
+  b.innerHTML = `<span><b>De app stopt ${left <= 0.5 ? 'vandaag' : 'morgen'}.</b> Sluit je iPhone aan op de pc en laat hem opnieuw installeren.</span><button title="Later">×</button>`;
+  $('button', b).onclick = () => { store.set('expiryHidden', new Date().toDateString()); b.remove(); };
+  document.body.appendChild(b);
+}
+
+// ================= Schermen in gebruik (linksboven) =================
+// Hoeveel apparaten er nu kijken op je abonnement (max. 2). Alleen als je zelf niets kijkt.
+let connBusy = false;
+async function updateConns() {
+  const pill = $('#connPill'); if (!pill || connBusy) return;
+  if (S.tab !== 'live') { pill.hidden = true; return; } // alleen op het beginscherm (Live TV)
+  if (!playerEl.hidden || document.hidden) return;
+  connBusy = true;
+  try {
+    const c = await api('/api/conns');
+    if (c.active < 0 || !c.max) { pill.hidden = true; return; }
+    pill.hidden = false;
+    pill.classList.toggle('full', c.active >= c.max);
+    pill.classList.toggle('free', c.active === 0);
+    $('span', pill).textContent = c.active === 0 ? `Niemand kijkt · ${c.max} schermen vrij` : `${c.active} van ${c.max} schermen kijken${c.active >= c.max ? ' · vol' : ''}`;
+  } catch { pill.hidden = true; } finally { connBusy = false; }
+}
+setInterval(updateConns, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) updateConns(); });
+
 // ================= Nieuw voor jou =================
 // Een belletje bovenin. Meldt: nieuwe afleveringen van series die je volgt (Mijn lijst + recent bekeken),
 // en titels die je via Zoeken "volgt" (bijv. een bokswedstrijd die nog niet beschikbaar is) zodra ze er zijn.
@@ -2201,6 +2250,8 @@ function startApp() {
     $('#newsBtn').onclick = openNews;
   }
   updateBell();
+  setTimeout(updateConns, 1500);
+  setTimeout(expiryReminder, 5000);
   setTimeout(checkNews, IS_APP ? 20000 : 8000);
   setTimeout(reportTabBar, 800); setTimeout(reportTabBar, 4000);
   // Opstartscherm blijft staan tot de eerste pagina klaar is (minstens 1 en hoogstens 4 seconden),

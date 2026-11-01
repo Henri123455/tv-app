@@ -214,6 +214,12 @@ async function route(url, init) {
   if (p === '/api/vodinfo') return cached('vi:' + q.id, () => api({ action: 'get_vod_info', vod_id: q.id }), true, 7 * 864e5);
   if (p === '/api/seriesinfo') return cached('si:' + q.id, () => api({ action: 'get_series_info', series_id: q.id }), true, 864e5);
   if (p === '/api/sport') return sportToday();
+  if (p === '/api/conns') {
+    try {
+      const u = (await (await realFetch(apiURL({}), { signal: AbortSignal.timeout(10000) })).json()).user_info || {};
+      return { active: Number(u.active_cons) || 0, max: Number(u.max_connections) || 0 };
+    } catch { return { active: -1, max: 0 }; }
+  }
   if (p === '/api/extra') return titleExtra(q.type === 'series' ? 'series' : 'vod', q.name || '').catch(() => ({ imdb: 0, similar: [] }));
   if (p === '/api/epg') {
     const j = await cached('epg:' + q.id, () => api({ action: 'get_short_epg', stream_id: q.id, limit: 3 }), false, 5 * 60e3);

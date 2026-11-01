@@ -17,12 +17,12 @@
     document.documentElement.dataset.theme = light ? 'light' : 'dark';
   })();
 </script>
-<link rel="icon" href="icon.svg?v=35">
-<link rel="apple-touch-icon" href="apple-touch-icon.png?v=35">
+<link rel="icon" href="icon.svg?v=36">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=36">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="preconnect" href="https://image.tmdb.org">
 <title>TV</title>
-<link rel="stylesheet" href="style.css?v=35">
+<link rel="stylesheet" href="style.css?v=36">
 </head>
 <body>
 
@@ -54,6 +54,7 @@
 
 <!-- Navigatie -->
 <nav id="nav" class="nav" hidden>
+  <div id="connPill" class="conn-pill" hidden title="Schermen die nu kijken op je abonnement"><i></i><span></span></div>
   <div class="nav-pill">
     <button data-tab="live" class="active"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/></svg><span>Live TV</span></button>
     <button data-tab="vod"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 8h16M4 16h16M9 3v18M15 3v18"/></svg><span>Films</span></button>

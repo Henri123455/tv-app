@@ -49,10 +49,12 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         let live = call.getBool("live") ?? false
         let series = call.getBool("series") ?? false
         let nextTitle = call.getString("nextTitle") ?? ""
+        let castFirst = call.getBool("castFirst") ?? false
         DispatchQueue.main.async {
             let vc = VLCPlayerViewController(url: url, title: title, start: start, live: live)
             vc.series = series
             vc.nextTitle = nextTitle
+            vc.castFirst = castFirst
             // user = zelf op het kruisje getikt (dan nooit een andere bron proberen), anders kapot/geen beeld
             vc.onExit = { [weak self] seconds, ended, length, user in
                 self?.notifyListeners(ended ? "ended" : "exit", data: ["currentTime": seconds, "duration": length, "user": user])
@@ -85,6 +87,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     // Series: "Intro overslaan" in het begin, en aan het eind "Volgende aflevering" met aftellen
     var series = false
     var nextTitle = ""
+    var castFirst = false // "Op tv" gekozen: meteen de Chromecast-keuze tonen
     private let introButton = UIButton(type: .system)
     private let nextButton = UIButton(type: .system)
     private var introSkipped = false
@@ -703,6 +706,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         routeChanged()
         // Al verbonden met een Chromecast? Dan meteen daarheen
         if let s = GCKCastContext.sharedInstance().sessionManager.currentCastSession { castToTV(s) }
+        else if castFirst { castFirst = false; GCKCastContext.sharedInstance().presentCastDialog() }
     }
 
     private func finish(ended: Bool, user: Bool = false) {
