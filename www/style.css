@@ -851,3 +851,6 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 .sug-group .sug-chips { display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; margin: 0 calc(-1 * var(--gutter)); padding-left: var(--gutter); padding-right: var(--gutter); }
 .sug-group .sug-chips::-webkit-scrollbar { display: none; }
 .sug-group .chip { flex: none; font-size: 14px; padding: 8px 14px; }
+
+/* Zoeken: suggesties toch onder elkaar laten doorlopen (niet zijwaarts schuiven) */
+.sug-group .sug-chips { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; }
