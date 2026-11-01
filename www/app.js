@@ -1970,7 +1970,7 @@ lightQuery.addEventListener?.('change', applyTheme);
 applyTheme();
 
 // ================= Inloggen =================
-function hideAll() { $('#login').hidden = true; $('#who').hidden = true; $('#nav').hidden = true; main.hidden = true; }
+function hideAll() { $('#login').hidden = true; $('#who').hidden = true; $('#nav').hidden = true; main.hidden = true; reportTabBar(); }
 // Opstartscherm zacht laten verdwijnen
 function hideSplash() {
   const s = $('#splash'); if (!s || s.hidden) return;
@@ -1988,6 +1988,17 @@ $('#loginForm').onsubmit = async e => {
 };
 
 // ================= Start =================
+// iPhone-app: de app vertelt waar de tabbladen staan; een onzichtbare laag in de app vangt daar tikken op
+// terwijl het scherm nog doorrolt (anders stopte die tik alleen het scrollen)
+function reportTabBar() {
+  const VLC = window.Capacitor?.Plugins?.VLCPlayer;
+  if (!IS_APP || !VLC?.setTabBar) return;
+  const nav = $('#nav'), pill = $('.nav-pill');
+  if (!nav || nav.hidden || !pill) return VLC.setTabBar({ top: 1e6, tabs: [] }).catch(() => {});
+  const r = pill.getBoundingClientRect();
+  VLC.setTabBar({ top: r.top, tabs: $$('.nav-pill button').map(b => { const q = b.getBoundingClientRect(); return { x: q.left, w: q.width, tab: b.dataset.tab }; }) }).catch(() => {});
+}
+addEventListener('resize', () => setTimeout(reportTabBar, 300));
 $$('.nav-pill button').forEach(b => {
   b.onclick = () => setTab(b.dataset.tab);
   // iPhone: tijdens het uitrollen van het scrollen stopt de eerste tik alleen het scrollen en komt er geen "klik".
@@ -2121,6 +2132,7 @@ function startApp() {
   }
   updateBell();
   setTimeout(checkNews, IS_APP ? 20000 : 8000);
+  setTimeout(reportTabBar, 800); setTimeout(reportTabBar, 4000);
   // Opstartscherm blijft staan tot de eerste pagina klaar is (minstens 1 en hoogstens 4 seconden),
   // zodat je meteen een volle, rustige pagina ziet in plaats van alles dat nog binnenkomt
   const t0 = Date.now();

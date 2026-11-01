@@ -7,6 +7,27 @@ import GoogleCast
 // - de thuisbalk onderin verdwijnt als je hem niet gebruikt
 // - een veeg onderin het scherm gaat niet meteen naar het beginscherm (eerst de balk, dan pas bij een tweede veeg)
 // - de ingebouwde VLC-speler wordt hier aangemeld
+// Tabbladen onderin aantikken terwijl het scherm nog doorrolt: iOS gebruikt die eerste tik normaal alleen om
+// het scrollen te stoppen. Deze onzichtbare laag ligt over de tabbalk en vangt de tik alleen op zolang de
+// pagina nog doorrolt; dan kiest hij meteen het juiste tabblad. Verder laat hij alles door naar de app.
+final class TabTapOverlay: UIView {
+    weak var scroll: UIScrollView?
+    var top: CGFloat = .greatestFiniteMagnitude
+    var tabs: [(x: CGFloat, w: CGFloat, tab: String)] = []
+    var onTab: ((String) -> Void)?
+    static weak var shared: TabTapOverlay?
+
+    override func point(inside p: CGPoint, with event: UIEvent?) -> Bool {
+        guard let s = scroll, s.isDecelerating, p.y >= top else { return false }
+        return tabs.contains { p.x >= $0.x && p.x <= $0.x + $0.w }
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let p = touches.first?.location(in: self), let hit = tabs.first(where: { p.x >= $0.x && p.x <= $0.x + $0.w }) else { return }
+        if let s = scroll { s.setContentOffset(s.contentOffset, animated: false) } // doorrollen stoppen
+        onTab?(hit.tab)
+    }
+}
+
 class MainViewController: CAPBridgeViewController {
     override var prefersHomeIndicatorAutoHidden: Bool { true }
     override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .bottom }
@@ -28,6 +49,16 @@ class MainViewController: CAPBridgeViewController {
             sv.maximumZoomScale = 1
             sv.bouncesZoom = false
         }
+        // Tabbalk-laag (de app geeft door waar de tabbladen staan, zie VLCPlayer.setTabBar)
+        let overlay = TabTapOverlay(frame: view.bounds)
+        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        overlay.backgroundColor = .clear
+        overlay.scroll = webView?.scrollView
+        overlay.onTab = { [weak self] tab in
+            self?.webView?.evaluateJavaScript("window.setTab && setTab('\(tab)')", completionHandler: nil)
+        }
+        view.addSubview(overlay)
+        TabTapOverlay.shared = overlay
     }
 
     override func viewWillAppear(_ animated: Bool) {

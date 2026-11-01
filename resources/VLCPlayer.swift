@@ -14,7 +14,22 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "VLCPlayer"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "play", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setTabBar", returnType: CAPPluginReturnPromise),
     ]
+
+    // Waar de tabbladen onderin staan (in punten), voor de laag die tikken tijdens het doorrollen opvangt
+    @objc func setTabBar(_ call: CAPPluginCall) {
+        let top = call.getDouble("top") ?? .greatestFiniteMagnitude
+        let tabs = (call.getArray("tabs", JSObject.self) ?? []).compactMap { t -> (x: CGFloat, w: CGFloat, tab: String)? in
+            guard let x = (t["x"] as? NSNumber)?.doubleValue, let w = (t["w"] as? NSNumber)?.doubleValue, let tab = t["tab"] as? String else { return nil }
+            return (CGFloat(x), CGFloat(w), tab)
+        }
+        DispatchQueue.main.async {
+            TabTapOverlay.shared?.top = CGFloat(top)
+            TabTapOverlay.shared?.tabs = tabs
+            call.resolve()
+        }
+    }
 
     @objc func play(_ call: CAPPluginCall) {
         guard let s = call.getString("url"), let url = URL(string: s) else { call.reject("Geen geldig adres"); return }
