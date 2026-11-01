@@ -28,7 +28,7 @@ VLC?.addListener('progress', d => cur?.progress?.(Number(d?.currentTime) || 0, N
 async function withVLC(o) {
   // Naar de tv (AirPlay) gekozen in de speler: verder in Apple's speler op dezelfde plek, die stuurt het beeld door
   cur = { ...o, airplay: pos => AV ? withApple({ ...o, start: pos > 5 ? pos : o.start || 0 }) : null };
-  try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0 }); }
+  try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live }); }
   catch { cur = null; toast('Afspelen lukt niet'); }
 }
 async function withApple(o) {
@@ -86,7 +86,7 @@ playLive = function (item, ctx) {
     if (i > 0) toast('Andere bron geprobeerd');
     const t0 = Date.now();
     play({
-      url: src('live', sources[i], 'm3u8'), title: tidyName(item.n), sub: 'Live',
+      url: src('live', sources[i], 'm3u8'), title: tidyName(item.n), sub: 'Live', live: true,
       exit: (pos, dur, user) => { if (!user && pos < 0.5 && Date.now() - t0 < 40000 && i + 1 < sources.length) tryIdx(i + 1); },
     }, true); // Zenders altijd in VLC: Apple's speler haperde of gaf alleen het QuickTime-teken bij deze streams
   };

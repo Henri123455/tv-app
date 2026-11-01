@@ -19,8 +19,9 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         guard let s = call.getString("url"), let url = URL(string: s) else { call.reject("Geen geldig adres"); return }
         let title = call.getString("title") ?? ""
         let start = call.getDouble("start") ?? 0
+        let live = call.getBool("live") ?? false
         DispatchQueue.main.async {
-            let vc = VLCPlayerViewController(url: url, title: title, start: start)
+            let vc = VLCPlayerViewController(url: url, title: title, start: start, live: live)
             // user = zelf op het kruisje getikt (dan nooit een andere bron proberen), anders kapot/geen beeld
             vc.onExit = { [weak self] seconds, ended, length, user in
                 self?.notifyListeners(ended ? "ended" : "exit", data: ["currentTime": seconds, "duration": length, "user": user])
@@ -90,10 +91,13 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     private var finished = false
     private var everPlayed = false
 
-    init(url: URL, title: String, start: Double) {
+    // Live tv: geen tijdbalk of tijden (die sloegen nergens op, bijv. "0:50 / 0:59"), maar gewoon "LIVE"
+    private let live: Bool
+    init(url: URL, title: String, start: Double, live: Bool = false) {
         self.url = url
         self.titleText = title
         self.start = start
+        self.live = live
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) wordt niet gebruikt") }
@@ -133,6 +137,17 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         timeLabel.textColor = .white
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         timeLabel.text = "0:00"
+        if live {
+            // Rood "LIVE"-label, geen tijdbalk en geen 10 s terug/vooruit
+            timeLabel.text = "  LIVE  "
+            timeLabel.font = .systemFont(ofSize: 13, weight: .heavy)
+            timeLabel.backgroundColor = .systemRed
+            timeLabel.layer.cornerRadius = 6
+            timeLabel.clipsToBounds = true
+            slider.isHidden = true
+            back.isHidden = true
+            fwd.isHidden = true
+        }
 
         slider.minimumTrackTintColor = .white
         slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.3)
@@ -532,7 +547,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         // Zodra de film loopt zijn de ondertitels bekend: Nederlands aan (of je eigen keuze), andere talen nooit
         if !subsApplied && player.time.intValue > 800 { subsApplied = true; applySubtitles() }
         if abs(seconds - lastProgress) >= 10 { lastProgress = seconds; onProgress?(seconds, length) }
-        if seeking { return }
+        if seeking || live { return }
         slider.value = player.position
         let len = Double(player.media?.length.intValue ?? 0) / 1000
         timeLabel.text = len > 0 ? format(seconds) + " / " + format(len) : format(seconds)

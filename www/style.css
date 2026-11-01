@@ -756,3 +756,7 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
   .ranked.live .rank-num { font-size: 68px; margin-right: -4px; }
 }
 .top10 .shelf, .top10 .ranked, .top10 .card { contain: none; }
+
+/* Terugkijk-lijst scrolt gewoon mee met het scherm (geen apart scrollvak) */
+.arch-list { max-height: none; overflow: visible; }
+
