@@ -844,3 +844,10 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 .top10 .ranked.live .card .now-t { height: 16px; line-height: 16px; }
 .top10 .ranked .card .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 [data-theme="light"] .top10 .ranked:nth-child(-n+3) .card .art { background: linear-gradient(160deg, #fff8e1, #f3e6bd); }
+
+/* Zoeken: suggesties netjes op één regel (zijwaarts schuiven), minder druk */
+.sug-group { margin: 6px var(--gutter) 14px; }
+.sug-group h4 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: none; letter-spacing: 0; }
+.sug-group .sug-chips { display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; margin: 0 calc(-1 * var(--gutter)); padding-left: var(--gutter); padding-right: var(--gutter); }
+.sug-group .sug-chips::-webkit-scrollbar { display: none; }
+.sug-group .chip { flex: none; font-size: 14px; padding: 8px 14px; }

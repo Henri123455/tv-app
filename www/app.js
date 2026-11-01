@@ -809,11 +809,20 @@ function renderMine() {
       : `<div class="empty"><h3>Nog niets bekeken</h3><p>Wat je kijkt, verschijnt hier, met hoe ver je was.</p></div>`;
     return;
   }
+  // Per soort alleen de eerste paar (net als bij Zoeken); de rest achter "Alles laten zien", zo blijft de lijst kort
+  const opt = x => view === 'recent' && x.dur ? { progress: x.pos / x.dur, sub: x.ep ? `S${x.ep.season} A${x.ep.num}` : '' } : (x.ep ? { sub: `S${x.ep.season} A${x.ep.num}` } : {});
   for (const [t, label] of [['live', 'Zenders'], ['vod', 'Films'], ['series', 'Series']]) {
     const l = list.filter(f => f.type === t);
     if (!l.length) continue;
-    body.insertAdjacentHTML('beforeend', `<h3 class="section-sub">${label}</h3><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx>${l.map(x => cardHTML(t, x, view === 'recent' && x.dur ? { progress: x.pos / x.dur, sub: x.ep ? `S${x.ep.season} A${x.ep.num}` : '' } : (x.ep ? { sub: `S${x.ep.season} A${x.ep.num}` } : {}))).join('')}</div>`);
+    const max = TUNE.search[t === 'live' ? 0 : 1] * (TOUCH ? 1 : 2);
+    body.insertAdjacentHTML('beforeend', `<h3 class="section-sub">${label}</h3><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx>${l.slice(0, max).map(x => cardHTML(t, x, opt(x))).join('')}</div>` +
+      (l.length > max ? `<button class="show-all" data-all="${t}"><span>Alles laten zien</span><small>${l.length} ${label.toLowerCase()}</small>${CHEVRON}</button>` : ''));
     const g = $$('.grid[data-ctx]', body).pop(); g._list = l; g._type = t;
+    const all = $(`[data-all="${t}"]`, body);
+    if (all) all.onclick = () => {
+      g.innerHTML = l.map(x => cardHTML(t, x, opt(x))).join('');
+      all.remove();
+    };
   }
 }
 
@@ -979,8 +988,9 @@ function renderSearch() {
   markSort();
   const chips = (title, list) => list.length ? `<div class="sug-group"><h4>${title}</h4><div class="sug-chips">${list.map(s => `<button class="chip" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>` : '';
   const idle = () => {
-    const recent = [...new Set(hist().map(x => tidyName(x.n)))].slice(0, 8);
-    sug.innerHTML = chips('Populair in Nederland', NL_SUGGEST) + chips('Recent bekeken', recent);
+    // Rustig en overzichtelijk: een paar suggesties en je laatste paar titels, elk op één regel
+    const recent = [...new Set(hist().map(x => tidyName(x.n).replace(YEAR_RE, '')))].slice(0, 5);
+    sug.innerHTML = chips('Recent bekeken', recent) + chips('Probeer', NL_SUGGEST.slice(0, 6));
     out.innerHTML = '';
   };
   sug.onclick = e => { const c = e.target.closest('[data-q]'); if (c) { input.value = c.dataset.q; run(true); } };
@@ -1978,7 +1988,18 @@ $('#loginForm').onsubmit = async e => {
 };
 
 // ================= Start =================
-$$('.nav-pill button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
+$$('.nav-pill button').forEach(b => {
+  b.onclick = () => setTab(b.dataset.tab);
+  // iPhone: tijdens het uitrollen van het scrollen stopt de eerste tik alleen het scrollen en komt er geen "klik".
+  // Daarom reageren de tabbladen al op het loslaten van je vinger, ook als het scherm nog beweegt.
+  let start = null;
+  b.addEventListener('touchstart', e => { const t = e.touches[0]; start = { x: t.clientX, y: t.clientY }; }, { passive: true });
+  b.addEventListener('touchend', e => {
+    const t = e.changedTouches[0];
+    if (start && Math.abs(t.clientX - start.x) < 12 && Math.abs(t.clientY - start.y) < 12) { e.preventDefault(); setTab(b.dataset.tab); }
+    start = null;
+  }, { passive: false });
+});
 let lastScroll = 0, navScrolled = false;
 // iPhone: na het toetsenbord (zoeken) of het draaien bleven de vaste balken soms halverwege het scherm hangen.
 // Even "op dezelfde plek scrollen" laat de telefoon alles opnieuw goed neerzetten.
