@@ -61,9 +61,44 @@ class MainViewController: CAPBridgeViewController {
         TabTapOverlay.shared = overlay
     }
 
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        MainViewController.backToPortrait(self)
+    // Terug van een speler: pas draaien als de app weer echt in beeld is (eerder weigert iOS het soms).
+    // De VLC-speler regelt dit zelf (closingPlayer), dit is voor Apple's speler.
+    static var closingPlayer = false
+    private var returning = false
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        returning = true
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard returning else { return }
+        returning = false
+        if !MainViewController.closingPlayer { MainViewController.backToPortrait(self) }
+    }
+
+    static func coverScreen(_ window: UIWindow?) -> UIView? {
+        guard let window = window else { return nil }
+        let cover = UIView(frame: window.bounds)
+        cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        cover.backgroundColor = .black
+        window.addSubview(cover)
+        return cover
+    }
+
+    // Na het draaien: de webpagina opnieuw laten schikken, en daarna pas de app tonen
+    static func settle(_ vc: UIViewController?, cover: UIView?) {
+        let web = (vc as? CAPBridgeViewController)?.webView
+        for t in [0.12, 0.38] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) {
+                web?.setNeedsLayout(); web?.layoutIfNeeded()
+                web?.evaluateJavaScript("window.dispatchEvent(new Event('resize')); window.dispatchEvent(new Event('orientationchange'));", completionHandler: nil)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            UIView.setAnimationsEnabled(true)
+            closingPlayer = false
+            UIView.animate(withDuration: 0.18, animations: { cover?.alpha = 0 }, completion: { _ in cover?.removeFromSuperview() })
+        }
     }
 
     // Na het afspelen: weer de stand van de telefoon volgen (houd je hem rechtop, dan meteen rechtop)

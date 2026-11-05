@@ -225,7 +225,7 @@ function flushHist() {
   if (!S.profile) return;
   fetch('/api/me/history', { method: 'PUT', keepalive: true, headers: { 'Content-Type': 'application/json', 'X-Profile': S.profile.id }, body: JSON.stringify(S.hist) }).catch(() => {});
 }
-addEventListener('pagehide', () => { saveProgress(); flushHist(); });
+addEventListener('pagehide', () => { saveProgress(); flushHist(); if (connPlaying && !P.casting) stopStreams(); });
 // Terug in de app na een tijdje (of elk halfuur open): kijken of er nieuwe films/series zijn
 let lastFresh = Date.now();
 const freshen = () => { if (Date.now() - lastFresh < 20 * 60e3) return; lastFresh = Date.now(); for (const el of Object.values(S.pages)) el._refresh?.(); checkNews(); };
@@ -573,7 +573,6 @@ function setTab(tab) {
   for (const s of S.pages[tab].querySelectorAll('.shelf')) if (s.scrollLeft) s.scrollLeft = 0;
   store.set('tab', tab);
   prepareTabs();
-  if ($('#connPill')) { if (tab === 'live') updateConns(); else $('#connPill').hidden = true; }
 }
 // Films en Series alvast op de achtergrond klaarzetten (als je even niets doet), zodat wisselen meteen gaat.
 // Trage telefoon: niet, om haperingen te voorkomen.
@@ -1386,15 +1385,20 @@ function openPlayer() {
     pushLayer(closePlayer);
     autoFullscreen();
   }
+  connMark(true);
   hideMsg(); poke();
 }
+// Meteen aan de pc melden dat er niet meer gekeken wordt (werkt ook als het venster net dichtgaat)
+function stopStreams() { if (!IS_APP) try { navigator.sendBeacon('/play/stop'); } catch {} }
 function closePlayer() {
   saveProgress();
   // Zelf gesloten: alles wat nog liep (andere bron zoeken, opnieuw proberen) stopt hier, er start niets meer vanzelf
   P.token = (P.token || 0) + 1; P.src = null; P.stages = null; P.opts = null;
   hideNextUp(); toggleIntro(false);
-  for (const t of [3000, 10000, 25000, 45000]) setTimeout(updateConns, t); // de aanbieder laat een gestopte verbinding pas na even los
   destroyEngines();
+  if (!P.casting) stopStreams();
+  P.casting = false; P.waitFree = false;
+  connMark(false);
   stopSubs();
   playerEl.hidden = true; $('#pSide').hidden = true; document.body.style.overflow = '';
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -1531,8 +1535,16 @@ function applySubPref() {
   const pick = pref === 'off' ? null : avail.find(x => x.lang === pref) || avail.find(x => x.lang === 'nl') || avail[0];
   if (P.hls) { P.hls.subtitleDisplay = !!pick; P.hls.subtitleTrack = pick ? pick.i : -1; }
   for (const [lang, t] of Object.entries(subTracks)) t.mode = !P.hls && pick?.lang === lang ? 'showing' : 'disabled';
+  muteForeignSubs();
   updateSubsBtn();
 }
+// Ondertitels die de browser zelf uit de film haalt (o.a. Safari op de telefoon): bij "uit" ook die uit
+function muteForeignSubs() {
+  if (subPref() !== 'off') return;
+  const own = Object.values(subTracks);
+  for (const t of video.textTracks) if (!own.includes(t)) t.mode = 'disabled';
+}
+video.textTracks?.addEventListener('addtrack', muteForeignSubs);
 function updateSubsBtn() {
   const b = $('#pSubs'); if (!b) return;
   // Altijd zichtbaar bij films en series (ook als de ondertitels nog moeten binnenkomen)
@@ -1563,20 +1575,22 @@ $('#pSubs')?.addEventListener('click', () => {
 });
 
 function tooMany() {
-  destroyEngines();
-  showMsg('Al 2 schermen in gebruik', 'Je abonnement laat maar 2 apparaten tegelijk kijken. Stop op een ander apparaat en probeer het opnieuw.',
+  destroyEngines(); stopStreams();
+  P.waitFree = true; connMark(false);
+  showMsg('Alle schermen zijn bezet', 'Zodra er een scherm vrijkomt, start dit vanzelf. Je kunt ook op een ander apparaat stoppen.',
     `<div class="hero-actions center"><button class="btn primary" onclick="retryLive()">Opnieuw proberen</button></div>`);
 }
-window.retryLive = () => { P.stage = 0; startStage(); };
+window.retryLive = () => { P.waitFree = false; connMark(true); hideMsg(); P.stage = 0; startStage(); };
 
 // Volgorde per apparaat:
 //  iPhone/Safari: gewone HLS (H.264, werkt meteen en met AirPlay) → fMP4-HLS via de pc (voor HEVC) → H.264-omzetting
-//  pc/Android:    HLS via hls.js → H.264-omzetting (als HEVC niet kan) → MPEG-TS
+//  pc/Android:    MPEG-TS → HLS via hls.js → H.264-omzetting (als HEVC niet kan)
+// Bij voorkeur nooit rechtstreeks .m3u8: de aanbieder houdt daarna ruim een minuut een scherm bezet, bij .ts maar ~3 s.
 // Lukt het allemaal niet, dan automatisch de volgende bron van dezelfde zender.
 function liveStages(id) {
   const ff = S.session?.ffmpeg, s = [];
   if (APPLE_NATIVE) { if (ff) s.push(`/play/fmp4/c/${id}/index.m3u8`); else s.push(`/play/live/${id}.m3u8`); if (ff) s.push(`/play/fmp4/x/${id}/index.m3u8`); }
-  else { s.push(`/play/live/${id}.m3u8`); s.push('ts:' + id); if (ff && !HEVC_OK) s.push(`/play/fmp4/x/${id}/index.m3u8`); }
+  else { s.push('ts:' + id); s.push(`/play/live/${id}.m3u8`); if (ff && !HEVC_OK) s.push(`/play/fmp4/x/${id}/index.m3u8`); }
   return s;
 }
 async function startStage() {
@@ -1625,16 +1639,16 @@ async function switchSource(i, auto) {
     setLoading(true);
     const codec = await codecOf(id);
     if (token !== P.token) return;
-    // H.264: eerst rechtstreeks bij de aanbieder (snelst, geen omweg), dan via de pc
+    // H.264: via de pc (.ts als bron, dus het scherm komt na sluiten meteen vrij); rechtstreeks alleen als dat niet lukt
     const direct = S.session.direct ? [`${S.session.direct.replace('/__/', '/live/')}/${id}.m3u8`] : [];
-    P.stages = codec === 'h264' ? [...direct, `/play/live/${id}.m3u8`, `/play/fmp4/c/${id}/index.m3u8`, `/play/fmp4/x/${id}/index.m3u8`] : liveStages(id);
+    P.stages = codec === 'h264' ? [`/play/fmp4/c/${id}/index.m3u8`, ...direct, `/play/live/${id}.m3u8`, `/play/fmp4/x/${id}/index.m3u8`] : liveStages(id);
   } else if (!APPLE_NATIVE && S.session?.ffmpeg) {
     // Pc: zenders met Dolby-geluid (NPO e.d.) of HEVC-beeld via de pc (geluid naar AAC, beeld onaangeroerd).
-    // Gewone H.264+AAC-zenders rechtstreeks (sneller). Onbekend = via de pc (werkt altijd), en meten voor de volgende keer.
+    // Gewone H.264+AAC-zenders direct als .ts (sneller, en het scherm komt na sluiten meteen vrij). Onbekend = via de pc (werkt altijd), en meten voor de volgende keer.
     const info = liveInfo[id];
-    const direct = info && info.audio === 'aac' && (info.codec === 'h264' || (info.codec === 'hevc' && HEVC_OK));
+    const direct = info && info.audio === 'aac' && info.codec === 'h264';
     const viaPc = info?.codec === 'hevc' && !HEVC_OK ? `/play/fmp4/x/${id}/index.m3u8` : `/play/fmp4/w/${id}/index.m3u8`;
-    P.stages = direct ? [`/play/live/${id}.m3u8`, viaPc] : [viaPc, `/play/live/${id}.m3u8`];
+    P.stages = direct ? ['ts:' + id, viaPc, `/play/live/${id}.m3u8`] : [viaPc, `/play/live/${id}.m3u8`];
     if (!info) api('/api/codec?id=' + id).then(r => { if (r.codec) { liveInfo[id] = r; store.set('liveInfo', liveInfo); } }).catch(() => {});
   } else P.stages = liveStages(id);
   startStage();
@@ -1915,12 +1929,12 @@ async function chromecast() {
   const req = new chrome.cast.media.LoadRequest(info);
   req.currentTime = m.pos || 0; req.autoplay = true;
   // Eigen beeld stoppen: de aanbieder staat maar 2 verbindingen toe, de tv heeft er nu een nodig
-  destroyEngines(); P.token = (P.token || 0) + 1;
+  destroyEngines(); P.token = (P.token || 0) + 1; P.casting = true;
   try { await session.loadMedia(req); }
   catch { showMsg('Casten lukt niet', 'De tv kon dit niet afspelen. Probeer een andere bron of zender.'); return true; }
   showMsg('Speelt af op je tv', `Op ${esc(session.getCastDevice().friendlyName || 'je Chromecast')}.`,
     `<div class="hero-actions center"><button class="btn primary" id="castStop">Stoppen met casten</button></div>`);
-  $('#castStop').onclick = () => { session.endSession(true); hideMsg(); closeTop(); };
+  $('#castStop').onclick = () => { session.endSession(true); P.casting = false; hideMsg(); closeTop(); };
   return true;
 }
 
@@ -2127,23 +2141,49 @@ function expiryReminder() {
 }
 
 // ================= Schermen in gebruik (linksboven) =================
-// Hoeveel apparaten er nu kijken op je abonnement (max. 2). Alleen als je zelf niets kijkt.
-let connBusy = false;
+// Live: wie er nu echt kijkt op je abonnement. De aanbieder telt elk apparaat; dit apparaat zelf tellen we niet mee,
+// ook niet in de tijd dat de aanbieder een net gestopte verbinding nog vasthoudt.
+const CONN_POLL = 4000, CONN_LINGER = 75000, CONN_SETTLE = 12000; // vasthouden: .ts ~3 s, .m3u8 ruim een minuut
+let connPlaying = false, connStart = 0, connFails = 0, connBusy = false;
+let connSelf = store.get('connSelf', null); // { t: laatst gezien, before: telling terwijl dit apparaat keek }
+function connMark(on) {
+  if (on === connPlaying) return;
+  connPlaying = on; connStart = Date.now();
+  connSelf = on ? null : { t: Date.now(), before: connSelf?.before || 0 };
+  store.set('connSelf', connSelf);
+  setTimeout(updateConns, on ? 0 : 800);
+}
+function connOthers(active) {
+  if (connPlaying) return Math.max(0, active - 1);
+  const s = connSelf; if (!s) return active;
+  const age = Date.now() - s.t;
+  if (s.before ? age < CONN_LINGER && active >= s.before : age < CONN_SETTLE) return Math.max(0, active - 1);
+  connSelf = null; store.set('connSelf', null); // eigen verbinding is weg: vanaf nu telt alles
+  return active;
+}
+function showConns(active, max) {
+  const pill = $('#connPill'); if (!pill) return;
+  const n = Math.min(connOthers(active), max), free = max - n;
+  pill.hidden = false;
+  pill.classList.toggle('full', free <= 0);
+  pill.classList.toggle('free', n === 0);
+  $('span', pill).textContent = n === 0 ? `Niemand kijkt · ${max} vrij` : `${n} ${n === 1 ? 'scherm kijkt' : 'schermen kijken'} · ${free > 0 ? free + ' vrij' : 'vol'}`;
+}
 async function updateConns() {
-  const pill = $('#connPill'); if (!pill || connBusy) return;
-  if (S.tab !== 'live') { pill.hidden = true; return; } // alleen op het beginscherm (Live TV)
-  if (!playerEl.hidden || document.hidden) return;
+  if (connBusy || !$('#connPill') || !S.session || (document.hidden && !connPlaying)) return;
   connBusy = true;
   try {
-    const c = await api('/api/conns');
-    if (c.active < 0 || !c.max) { pill.hidden = true; return; }
-    pill.hidden = false;
-    pill.classList.toggle('full', c.active >= c.max);
-    pill.classList.toggle('free', c.active === 0);
-    $('span', pill).textContent = c.active === 0 ? `Niemand kijkt · ${c.max} schermen vrij` : `${c.active} van ${c.max} schermen kijken${c.active >= c.max ? ' · vol' : ''}`;
-  } catch { pill.hidden = true; } finally { connBusy = false; }
+    const r = await fetch('/api/conns', { signal: AbortSignal.timeout(6000) });
+    const c = await r.json();
+    if (!r.ok || c.active < 0 || !c.max) throw 0;
+    connFails = 0;
+    // Pas als de aanbieder ons heeft kunnen zien is dit een betrouwbare telling "terwijl ik keek"
+    if (connPlaying && Date.now() - connStart > CONN_SETTLE) { connSelf = { t: Date.now(), before: c.active }; store.set('connSelf', connSelf); }
+    showConns(c.active, c.max);
+    if (P.waitFree && c.active < c.max) window.retryLive();
+  } catch { if (++connFails >= 3) $('#connPill').hidden = true; } finally { connBusy = false; }
 }
-setInterval(updateConns, 15000); // vaak verversen: de aanbieder telt een gestopte verbinding nog even mee
+setInterval(updateConns, CONN_POLL);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) updateConns(); });
 
 // ================= Nieuw voor jou =================

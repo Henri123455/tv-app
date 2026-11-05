@@ -878,7 +878,8 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 .conn-pill i { width: 8px; height: 8px; border-radius: 50%; background: #ff9f0a; box-shadow: 0 0 8px rgba(255,159,10,.7); }
 .conn-pill.free i { background: #30d158; box-shadow: 0 0 8px rgba(48,209,88,.7); }
 .conn-pill.full i { background: #ff453a; box-shadow: 0 0 8px rgba(255,69,58,.7); }
-@media (max-width: 760px) { .conn-pill { position: fixed; top: max(14px, env(safe-area-inset-top)); left: 14px; font-size: 12px; padding: 6px 11px; } .nav.scrolled .conn-pill { opacity: 0; pointer-events: none; } }
+.conn-pill span { white-space: nowrap; font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) { .conn-pill { position: fixed; top: max(14px, env(safe-area-inset-top)); left: 14px; font-size: 12px; padding: 6px 11px; } }
 [data-theme="light"] .conn-pill { background: #fff; box-shadow: 0 0 0 .5px rgba(0,0,0,.1), 0 2px 8px rgba(0,0,0,.06); }
 
 /* Herinnering: app stopt bijna (iPhone, 7 dagen) */

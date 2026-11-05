@@ -16,7 +16,13 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "play", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTabBar", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "switchTo", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "subtitlePref", returnType: CAPPluginReturnPromise),
     ]
+
+    // Staat ondertiteling uit? De app kiest dan VLC, want Apple's speler zet ondertiteling soms zelf aan
+    @objc func subtitlePref(_ call: CAPPluginCall) {
+        call.resolve(["value": UserDefaults.standard.string(forKey: "tvSubtitleLanguage") ?? "nl"])
+    }
 
     // Zappen: andere zender in de speler die al open is
     @objc func switchTo(_ call: CAPPluginCall) {
@@ -208,6 +214,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     ])
     private let subsButton = UIButton(type: .system)
     private var subsApplied = false
+    private var subsSeen = 0
     private let videoView = UIView()
     private let controls = UIView()
     private let playButton = UIButton(type: .system)
@@ -295,6 +302,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         airplay.activeTintColor = .systemBlue
         if #available(iOS 13.0, *) { airplay.prioritizesVideoDevices = true }
         NotificationCenter.default.addObserver(self, selector: #selector(routeChanged), name: AVAudioSession.routeChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(leftApp), name: UIApplication.didEnterBackgroundNotification, object: nil)
 
         // Chromecast-knop (verschijnt alleen als er een Chromecast/tv in je wifi is)
         let castButton = GCKUICastButton(frame: CGRect(x: 0, y: 0, width: 24, height: 24))
@@ -630,12 +638,15 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
 
     // Sluiten en meteen terugdraaien, zonder draai-animatie: tijdens die animatie moest de hele app-pagina
     // steeds opnieuw worden opgebouwd, dat gaf haperingen. Nu staat hij in één keer goed.
+    // Een zwart vlak dekt het draaien af tot de app-pagina zich opnieuw heeft geschikt: zo zie je geen half gedraaid scherm.
     private func closeQuickly(_ then: @escaping () -> Void) {
         let back = presentingViewController
+        let cover = MainViewController.coverScreen(view.window)
+        MainViewController.closingPlayer = true
         UIView.setAnimationsEnabled(false)
         dismiss(animated: false) {
             MainViewController.backToPortrait(back)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { UIView.setAnimationsEnabled(true) }
+            MainViewController.settle(back, cover: cover)
             then()
         }
     }
@@ -651,6 +662,12 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             nextButton.setTitle("Volgende aflevering · \(nextTitle) (\(Int(left.rounded(.up))))", for: .normal)
             nextButton.isHidden = false
         } else { nextButton.isHidden = true }
+    }
+
+    // App weggeveegd: niet stiekem doorspelen, anders blijft er een scherm bezet (Chromecast speelt gewoon door op de tv)
+    @objc private func leftApp() {
+        guard !casting else { return }
+        finish(ended: false, user: true)
     }
 
     @objc private func routeChanged() {
@@ -673,8 +690,10 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     // ---- Chromecast: tv gekozen → daar verder op dezelfde plek, de telefoon pauzeert ----
     private func castToTV(_ session: GCKCastSession) {
         guard !finished, let client = session.remoteMediaClient else { return }
-        let ext = url.pathExtension.lowercased()
-        let builder = GCKMediaInformationBuilder(contentURL: url)
+        // Live speelt hier als .ts (scherm komt na sluiten meteen vrij), Chromecast kan alleen de .m3u8 van dezelfde zender
+        let castURL = url.pathExtension.lowercased() == "ts" ? url.deletingPathExtension().appendingPathExtension("m3u8") : url
+        let ext = castURL.pathExtension.lowercased()
+        let builder = GCKMediaInformationBuilder(contentURL: castURL)
         builder.streamType = live ? .live : .buffered
         builder.contentType = ext == "m3u8" ? "application/x-mpegURL" : ext == "mkv" ? "video/x-matroska" : "video/mp4"
         if ext == "m3u8" { builder.hlsSegmentFormat = .TS; builder.hlsVideoSegmentFormat = .MPEG2_TS }
@@ -762,6 +781,20 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         return out.sorted { $0.lang == "nl" && $1.lang != "nl" }
     }
 
+    // Zodra de film loopt zijn de ondertitels bekend: Nederlands aan (of je eigen keuze), andere talen nooit.
+    // VLC zet een ondertitel die in de film als "standaard" staat zelf aan, ook later nog als die pas na het starten
+    // verschijnt. Daarom bij elke stap controleren: uit blijft uit, en nieuwe ondertitels krijgen meteen je eigen keuze.
+    private func enforceSubtitles() {
+        if UserDefaults.standard.string(forKey: Self.prefKey) == "off" && player.currentVideoSubTitleIndex >= 0 {
+            player.currentVideoSubTitleIndex = -1
+        }
+        let count = (player.videoSubTitlesIndexes as? [NSNumber])?.count ?? 0
+        if (!subsApplied || count != subsSeen) && player.time.intValue > 800 {
+            subsApplied = true; subsSeen = count
+            applySubtitles()
+        }
+    }
+
     private func applySubtitles() {
         let choices = subtitleChoices()
         let pref = UserDefaults.standard.string(forKey: Self.prefKey) ?? "nl"
@@ -801,8 +834,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         }
         everPlayed = true
         spinner.stopAnimating()
-        // Zodra de film loopt zijn de ondertitels bekend: Nederlands aan (of je eigen keuze), andere talen nooit
-        if !subsApplied && player.time.intValue > 800 { subsApplied = true; applySubtitles() }
+        enforceSubtitles()
         if abs(seconds - lastProgress) >= 10 { lastProgress = seconds; onProgress?(seconds, length) }
         if !live { updateSeriesButtons() }
         if seeking || live { return }

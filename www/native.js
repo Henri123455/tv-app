@@ -18,8 +18,7 @@ let cur = null;
 const done = (pos, ended, dur, user) => {
   const c = cur; cur = null; if (!c) return;
   if (ended) c.ended?.(); else c.exit?.(pos, dur, user);
-  // Schermen-teller linksboven bijwerken (de aanbieder laat een gestopte verbinding pas na even los)
-  for (const t of [3000, 10000, 25000, 45000]) setTimeout(() => typeof updateConns === 'function' && updateConns(), t);
+  connMark(false);
 };
 // Apple's speler: was de film geladen (klaar om te spelen)? Dan is sluiten altijd jouw keuze
 AV?.addListener('jeepCapVideoPlayerReady', () => { if (cur) cur.ready = true; if (cur?.start > 5) AV.setCurrentTime({ playerId: 'fullscreen', seektime: cur.start }).catch(() => {}); });
@@ -33,17 +32,21 @@ VLC?.addListener('zap', d => cur?.zap?.(Number(d?.dir) || 1));
 VLC?.addListener('reload', d => { const c = cur; cur = null; c?.reload?.(Number(d?.currentTime) || 0); });
 VLC?.addListener('progress', d => cur?.progress?.(Number(d?.currentTime) || 0, Number(d?.duration) || 0));
 
+// Een live .ts-stream kan alleen VLC; Apple's speler krijgt dezelfde zender als .m3u8
+const forApple = o => ({ ...o, url: o.url.replace(/\.ts$/, '.m3u8') });
 async function withVLC(o) {
+  connMark(true);
   // Naar de tv (AirPlay) gekozen in de speler: verder in Apple's speler op dezelfde plek, die stuurt het beeld door
-  cur = { ...o, airplay: pos => AV ? withApple({ ...o, start: pos > 5 ? pos : o.start || 0 }) : null,
+  cur = { ...o, airplay: pos => AV ? withApple(forApple({ ...o, start: pos > 5 ? pos : o.start || 0 })) : null,
     // Beeld-in-beeld: verder in Apple's speler; daar het beeld-in-beeld-knopje (of veeg naar het beginscherm)
-    pip: pos => { if (!AV) return; toast('Tik op het beeld-in-beeld-knopje in de speler'); withApple({ ...o, start: pos > 5 ? pos : o.start || 0 }); },
+    pip: pos => { if (!AV) return; toast('Tik op het beeld-in-beeld-knopje in de speler'); withApple(forApple({ ...o, start: pos > 5 ? pos : o.start || 0 })); },
     // Andere ondertitelgrootte gekozen: dezelfde film op dezelfde plek opnieuw openen
     reload: pos => withVLC({ ...o, start: o.live ? 0 : pos }) };
   try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live, series: !!o.series, nextTitle: o.nextTitle || '', castFirst: !!o.castFirst }); }
-  catch { cur = null; toast('Afspelen lukt niet'); }
+  catch { cur = null; connMark(false); toast('Afspelen lukt niet'); }
 }
 async function withApple(o) {
+  connMark(true);
   const t0 = Date.now();
   // Meteen weer dicht zonder beeld? Dan was dit formaat niets voor Apple's speler: VLC proberen
   cur = { ...o, exit: (pos, dur, user) => { if (!user && VLC && pos < 0.5 && Date.now() - t0 < 20000) { withVLC(o); } else o.exit?.(pos, dur, user); } };
@@ -54,7 +57,7 @@ async function withApple(o) {
       title: o.title || '', smallTitle: o.sub || '',
     });
     if (r && r.result === false) throw new Error(r.message);
-  } catch { if (VLC) withVLC(o); else { cur = null; toast('Afspelen lukt niet'); } }
+  } catch { if (VLC) withVLC(o); else { cur = null; connMark(false); toast('Afspelen lukt niet'); } }
 }
 const play = (o, preferVLC) => (preferVLC || !AV) && VLC ? withVLC(o) : withApple(o);
 
@@ -91,14 +94,12 @@ playLive = function (item, ctx) {
   saveHist({ k, type: 'live', id: item.id, n: item.n, i: item.i, alt: item.alt });
   countView(k, item);
   const tryIdx = async i => {
-    // Kapotte bron? Meteen de volgende, zonder eerst de speler te openen
-    if (run !== playRun) return;
-    if (i + 1 < sources.length && !(await alive(src('live', sources[i], 'm3u8')))) return tryIdx(i + 1);
+    // Niet vooraf proberen: elke proefverbinding bezet een scherm bij de aanbieder. VLC meldt een kapotte bron zelf binnen 10 s
     if (run !== playRun) return;
     if (i > 0) toast('Andere bron geprobeerd');
     const t0 = Date.now();
     play({
-      url: src('live', sources[i], 'm3u8'), title: tidyName(item.n), sub: 'Live', live: true,
+      url: src('live', sources[i], 'ts'), title: tidyName(item.n), sub: 'Live', live: true,
       // Vegen in de speler: volgende/vorige zender uit dezelfde rij, zonder de speler te sluiten
       zap: dir => {
         const list = ctx && ctx.length > 1 ? ctx : null; if (!list) return;
@@ -108,7 +109,7 @@ playLive = function (item, ctx) {
         const k2 = favKey('live', item.id);
         items.set(k2, { ...item, type: 'live' });
         saveHist({ k: k2, type: 'live', id: item.id, n: item.n, i: item.i, alt: item.alt });
-        VLC.switchTo({ url: src('live', item.id, 'm3u8'), title: tidyName(item.n) }).catch(() => {});
+        VLC.switchTo({ url: src('live', item.id, 'ts'), title: tidyName(item.n) }).catch(() => {});
       },
       exit: (pos, dur, user) => { if (!user && pos < 0.5 && Date.now() - t0 < 40000 && i + 1 < sources.length) tryIdx(i + 1); },
     }, true); // Zenders altijd in VLC: Apple's speler haperde of gaf alleen het QuickTime-teken bij deze streams
@@ -166,6 +167,9 @@ playVod = function (o) {
     if (i > 0) toast('Andere versie geprobeerd');
     const t0 = Date.now();
     let played = false;
+    // Ondertiteling uit: altijd VLC, die luistert daarnaar. Apple's speler zet ingebouwde ondertitels soms zelf aan
+    const subsOff = await VLC?.subtitlePref?.().then(r => r.value === 'off', () => false);
+    if (run !== playRun) return;
     play({
       url, title: o.title, sub: o.sub || '', start: o.start || 0,
       series: o.kind === 'series', nextTitle: o.next ? (o.nextLabel || 'volgende') : '', castFirst,
@@ -176,7 +180,7 @@ playVod = function (o) {
       // Tussendoor bewaren (elke 10 s): ook als de app wordt afgesloten of de telefoon uitvalt, weet hij waar je was
       progress: (pos, dur) => { played = true; if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || o.duration || 0 }); },
       ended: () => { if (o.hist) saveHist({ ...o.hist, pos: o.duration || 0, dur: o.duration || 0 }); if (o.next) setTimeout(o.next, 600); },
-    }, castFirst || (!s.url && (!APPLE_EXT.test(s.e || '') || s.hq)));
+    }, castFirst || subsOff || (!s.url && (!APPLE_EXT.test(s.e || '') || s.hq)));
   };
   tryIdx(0);
 };

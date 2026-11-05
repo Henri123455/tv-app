@@ -972,7 +972,7 @@ async function route(url, init) {
   if (p === '/api/sport') return sportToday();
   if (p === '/api/conns') {
     try {
-      const u = (await (await realFetch(apiURL({}), { signal: AbortSignal.timeout(10000) })).json()).user_info || {};
+      const u = (await (await realFetch(apiURL({}), { signal: AbortSignal.timeout(5000) })).json()).user_info || {};
       return { active: Number(u.active_cons) || 0, max: Number(u.max_connections) || 0 };
     } catch { return { active: -1, max: 0 }; }
   }
