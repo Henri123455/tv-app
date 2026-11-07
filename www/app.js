@@ -119,11 +119,17 @@ async function flushYears() {
   if (yearQueue.size) setTimeout(flushYears, 600); // rustig aan: niet alles tegelijk (zwakke telefoon, aanbieder)
 }
 // Speelduur netjes: "1 u 54 min" (de aanbieder geeft soms "01:54:00", soms alleen minuten "114")
+// Soms klopt "duration_secs" niet (bijv. 91 terwijl de film 01:31:00 duurt): dan telt de langste van de twee,
+// en een "lengte in seconden" van minder dan 10 minuten bij een film is eigenlijk in minuten.
 function durSecs(i) {
-  let s = Number(i?.duration_secs) || 0;
+  const secs = Number(i?.duration_secs) || 0;
   const d = String(i?.duration || '').trim();
-  if (!s && /^\d+:\d+(:\d+)?$/.test(d)) s = d.split(':').reduce((a, v) => a * 60 + Number(v), 0) * (d.split(':').length === 2 ? 60 : 1);
-  if (!s && /^\d+$/.test(d)) s = Number(d) * 60;
+  let s = 0;
+  if (/^\d+:\d+(:\d+)?$/.test(d)) s = d.split(':').reduce((a, v) => a * 60 + Number(v), 0) * (d.split(':').length === 2 ? 60 : 1);
+  else if (/^\d+$/.test(d)) s = Number(d) * 60;
+  if (s > 5 * 3600 && d.split(':').length === 2) s /= 60; // "45:00" = minuten:seconden, geen 45 uur
+  s = Math.max(s, secs);
+  if (s > 0 && s < 600 && secs >= 15) s = secs * 60;
   return s;
 }
 function fmtDuration(i) {
@@ -1836,6 +1842,7 @@ function playVod(o) {
 }
 function seekVod(t, first) {
   const o = P.opts; if (!o) return;
+  if (P.duration && curTime() > P.duration + 5) P.duration = 0; // opgegeven lengte klopt niet: niet op vertrouwen
   t = Math.max(0, P.duration ? Math.min(t, P.duration - 2) : t);
   const v = vodURL(o, t);
   if (!first && !P.remux && !v.remux) { video.currentTime = t; return; }
@@ -1852,6 +1859,7 @@ const totalTime = () => P.duration || (isFinite(video.duration) ? P.offset + vid
 let lastSave = 0;
 function saveProgress() {
   if (!P.opts || P.live || !P.opts.hist) return;
+  if (P.duration && curTime() > P.duration + 5) P.duration = 0;
   const pos = curTime(), dur = totalTime();
   if (pos < 5) return;
   saveHist({ ...P.opts.hist, pos, dur });
