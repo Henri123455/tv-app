@@ -17,7 +17,20 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setTabBar", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "switchTo", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "subtitlePref", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setSubs", returnType: CAPPluginReturnPromise),
     ]
+
+    // Ondertitels van internet voor de film die nu start (komt vlak na het starten binnen)
+    @objc func setSubs(_ call: CAPPluginCall) {
+        let run = call.getInt("run") ?? 0
+        var subs: [String: URL] = [:]
+        for lang in ["nl", "en"] { if let s = call.getString(lang), let u = URL(string: s) { subs[lang] = u } }
+        DispatchQueue.main.async {
+            VLCPlayerViewController.lastSubs = (run, subs)
+            if let vc = VLCPlayerViewController.current, vc.playRun == run { vc.setExternal(subs) }
+            call.resolve()
+        }
+    }
 
     // Staat ondertiteling uit? De app kiest dan VLC, want Apple's speler zet ondertiteling soms zelf aan
     @objc func subtitlePref(_ call: CAPPluginCall) {
@@ -56,6 +69,7 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         let series = call.getBool("series") ?? false
         let nextTitle = call.getString("nextTitle") ?? ""
         let castFirst = call.getBool("castFirst") ?? false
+        let run = call.getInt("run") ?? 0
         DispatchQueue.main.async {
             let vc = VLCPlayerViewController(url: url, title: title, start: start, live: live)
             vc.series = series
@@ -79,6 +93,8 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             vc.onZap = { [weak self] dir in self?.notifyListeners("zap", data: ["dir": dir]) }
             vc.onReload = { [weak self] seconds in self?.notifyListeners("reload", data: ["currentTime": seconds]) }
+            vc.playRun = run
+            if let l = VLCPlayerViewController.lastSubs, l.run == run, run > 0 { vc.setExternal(l.subs) }
             VLCPlayerViewController.current = vc
             vc.modalPresentationStyle = .fullScreen
             self.bridge?.viewController?.present(vc, animated: true)
@@ -103,6 +119,42 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     var onZap: ((Int) -> Void)?       // -1 = vorige zender, 1 = volgende
     var onReload: ((Double) -> Void)? // opnieuw openen op deze plek (bijv. na andere ondertitelgrootte)
     static weak var current: VLCPlayerViewController?
+    static var lastSubs: (run: Int, subs: [String: URL])?
+    var playRun = 0
+
+    // ---- Ondertitels van internet: alleen als de film zelf geen ondertitel in die taal heeft ----
+    private var external: [String: URL] = [:]
+    private var externalIdx: [String: Int32] = [:]
+    private var externalLoading = Set<String>()
+    func setExternal(_ subs: [String: URL]) {
+        external = subs
+        if player.time.intValue > 800 { applySubtitles() }
+    }
+    private func subIndexes() -> [Int32] { ((player.videoSubTitlesIndexes as? [NSNumber]) ?? []).map { $0.int32Value } }
+    // Toevoegen aan VLC; welk nummer de nieuwe ondertitel krijgt, zien we pas even later
+    private func loadExternal(_ lang: String) {
+        guard let u = external[lang], externalIdx[lang] == nil, !externalLoading.contains(lang) else { return }
+        externalLoading.insert(lang)
+        let before = Set(subIndexes())
+        _ = player.addPlaybackSlave(u, type: .subtitle, enforce: true)
+        for t in [0.4, 1.0, 2.0, 3.5, 6.0, 10.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+                guard let self = self, !self.finished, self.externalIdx[lang] == nil else { return }
+                let now = self.subIndexes()
+                guard let idx = now.first(where: { $0 >= 0 && !before.contains($0) && !self.externalIdx.values.contains($0) }) else {
+                    if t >= 10 { self.externalLoading.remove(lang) }
+                    return
+                }
+                self.externalIdx[lang] = idx
+                self.externalLoading.remove(lang)
+                self.subsSeen = now.count
+                let pref = UserDefaults.standard.string(forKey: Self.prefKey) ?? "nl"
+                if pref == lang { self.player.currentVideoSubTitleIndex = idx }
+                else if pref == "off" { self.player.currentVideoSubTitleIndex = -1 }
+                self.buildSubtitleMenu(self.subtitleChoices())
+            }
+        }
+    }
     private let titleLabel = UILabel()
     private let settingsButton = UIButton(type: .system)
     private var sleepTimer: Timer?
@@ -764,7 +816,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         // Per taal de volledige ondertitel kiezen: niet de "forced"-variant (alleen buitenlandse stukjes)
         // en liefst niet de doven/slechthorenden-versie met [geluiden] ertussen
         var best: [String: (score: Int, index: Int32)] = [:]
-        for (n, i) in zip(names, indexes) where i.int32Value >= 0 {
+        for (n, i) in zip(names, indexes) where i.int32Value >= 0 && !externalIdx.values.contains(i.int32Value) {
             let l = n.lowercased()
             let isNL = l.contains("dut") || l.contains("nld") || l.contains("dutch") || l.contains("nederlands") || l.contains("vlaams") || l.range(of: "\\bnl\\b", options: .regularExpression) != nil
             let isEN = !isNL && (l.contains("eng") || l.range(of: "\\ben\\b", options: .regularExpression) != nil)
@@ -777,7 +829,10 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             if let b = best[lang], b.score >= score { continue }
             best[lang] = (score, i.int32Value)
         }
-        let out = best.map { (name: $0.key == "nl" ? "Nederlands" : "English", index: $0.value.index, lang: $0.key) }
+        var out = best.map { (name: $0.key == "nl" ? "Nederlands" : "English", index: $0.value.index, lang: $0.key) }
+        for lang in ["nl", "en"] where best[lang] == nil && external[lang] != nil {
+            out.append((name: lang == "nl" ? "Nederlands" : "English", index: externalIdx[lang] ?? -2, lang: lang))
+        }
         return out.sorted { $0.lang == "nl" && $1.lang != "nl" }
     }
 
@@ -799,7 +854,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         let choices = subtitleChoices()
         let pref = UserDefaults.standard.string(forKey: Self.prefKey) ?? "nl"
         if pref != "off", let pick = choices.first(where: { $0.lang == pref }) ?? choices.first {
-            player.currentVideoSubTitleIndex = pick.index
+            if pick.index == -2 { loadExternal(pick.lang) } else { player.currentVideoSubTitleIndex = pick.index }
         } else {
             player.currentVideoSubTitleIndex = -1 // geen ondertitel (ook geen andere taal)
         }
@@ -810,7 +865,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         guard #available(iOS 14.0, *) else { return }
         subsButton.isHidden = choices.isEmpty
         let current = player.currentVideoSubTitleIndex
-        var actions = [UIAction(title: "Uit", state: current < 0 ? .on : .off) { [weak self] _ in
+        var actions: [UIMenuElement] = [UIAction(title: "Uit", state: current < 0 ? .on : .off) { [weak self] _ in
             UserDefaults.standard.set("off", forKey: Self.prefKey)
             self?.player.currentVideoSubTitleIndex = -1
             self?.buildSubtitleMenu(choices)
@@ -818,9 +873,23 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         for c in choices {
             actions.append(UIAction(title: c.name, state: current == c.index ? .on : .off) { [weak self] _ in
                 UserDefaults.standard.set(c.lang, forKey: Self.prefKey)
-                self?.player.currentVideoSubTitleIndex = c.index
+                if c.index == -2 { self?.loadExternal(c.lang) } else { self?.player.currentVideoSubTitleIndex = c.index }
                 self?.buildSubtitleMenu(choices)
             })
+        }
+        // Loopt de ondertitel niet gelijk met het beeld (komt vaker voor bij die van internet)? Eerder of later zetten
+        if current >= 0 {
+            let delay = Double(player.currentVideoSubTitleDelay) / 1_000_000
+            let shift = { [weak self] (d: Double) in
+                guard let self = self else { return }
+                self.player.currentVideoSubTitleDelay = Int((Double(self.player.currentVideoSubTitleDelay) / 1_000_000 + d) * 1_000_000)
+                self.buildSubtitleMenu(choices)
+            }
+            let sync = UIMenu(title: delay == 0 ? "Gelijk zetten" : String(format: "Gelijk zetten (%+.1f s)", delay), children: [
+                UIAction(title: "0,5 s eerder") { _ in shift(-0.5) },
+                UIAction(title: "0,5 s later") { _ in shift(0.5) },
+            ])
+            actions.append(sync)
         }
         subsButton.menu = UIMenu(title: "Ondertiteling", children: actions)
     }

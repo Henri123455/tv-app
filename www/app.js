@@ -82,6 +82,7 @@ function tidyCat(s) {
     return w;
   }).join('').replace(/^[\s|&-]+|[\s|&-]+$/g, '') || 'Overig';
 }
+const nameYearOf = n => (String(n || '').match(/\((19\d\d|20\d\d)\)/) || [])[1] || '';
 const tidyName = s => fixCaps(String(s || '')).replace(SUP, '').replace(/^\s*\[[^\]]{1,24}\]\s*/, '').replace(/^\s*(16K|8K|4K|UHD|FHD|HD|SD)\s*[|:-]\s*/i, '').replace(/\s+/g, ' ').trim();
 const initials = n => esc(tidyName(n).replace(/[^\p{L}\p{N} ]/gu, '').split(' ').filter(Boolean).slice(0, 2).map(w => w.slice(0, w.length < 4 ? 4 : 1)).join(' ').slice(0, 8) || '•');
 // Series: het jaartal van het laatste seizoen in plaats van het startjaar ("Manifest (2018 - 2023)" wordt "Manifest (2023)").
@@ -273,9 +274,45 @@ function cardHTML(type, x, opt = {}) {
   return `<button class="card ${live ? 'live' : 'poster'}" data-k="${esc(k)}">
     <div class="art">${img ? `<img decoding="async" referrerpolicy="no-referrer" alt="${esc(x.n)}" data-src="${esc(live ? img : sized(img))}">` : live ? `<span class="initials">${initials(x.n)}</span>` : placeholder(x.n)}
       <span class="fav-badge ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}">${HEART}</span>${prog}</div>
-    <div class="name"${type === 'series' && !lastSeason[x.id] ? ` data-sy="${esc(x.id)}"` : ''}>${esc(type === 'series' ? seriesName(x) : tidyName(x.n))}</div>${opt.sub ?`<div class="sub">${esc(opt.sub)}</div>` : ''}
+    <div class="name"${type === 'series' && !lastSeason[x.id] ? ` data-sy="${esc(x.id)}"` : ''}>${esc(type === 'series' ? seriesName(x) : tidyName(x.n))}</div>${opt.sub ?`<div class="sub">${esc(opt.sub)}</div>` : ''}${live && !opt.sub ? '<div class="now-t">&nbsp;</div>' : ''}
   </button>`;
 }
+
+// ================= Nu op tv: onder elke zender wat er nu is, met een balkje hoe ver het programma is =================
+// Alleen voor zenders die in beeld komen, in groepjes opgevraagd; elke minuut bijgewerkt.
+const nowCache = new Map(), nowQueue = new Set(), nowSeen = new Set();
+let nowTimer;
+const hhmmOf = s => new Date(s * 1000).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+function drawNow(card) {
+  const id = card.dataset.k.split(':')[1], d = nowCache.get(id)?.d;
+  const line = $('.now-t', card); if (!line) return;
+  if (!d) return;
+  line.textContent = d.t;
+  line.title = `${hhmmOf(d.s)} – ${hhmmOf(d.e)}${d.n ? ' · Hierna: ' + d.n : ''}`;
+  const art = $('.art', card); let bar = $('.now-bar', art);
+  if (!bar) { art.insertAdjacentHTML('beforeend', '<div class="now-bar"><i></i></div>'); bar = $('.now-bar', art); }
+  bar.firstChild.style.width = Math.max(2, Math.min(100, (Date.now() / 1000 - d.s) / (d.e - d.s) * 100)).toFixed(1) + '%';
+}
+function needNow(card) {
+  const id = card.dataset.k.split(':')[1], c = nowCache.get(id);
+  if (c && (c.d ? c.d.e * 1000 > Date.now() : Date.now() - c.at < 10 * 60e3)) return drawNow(card);
+  nowQueue.add(id);
+  clearTimeout(nowTimer); nowTimer = setTimeout(flushNow, 150);
+}
+async function flushNow() {
+  const ids = [...nowQueue].slice(0, 40); ids.forEach(id => nowQueue.delete(id));
+  if (!ids.length) return;
+  try {
+    const r = await api('/api/epgnow?ids=' + ids.join(','));
+    for (const id of ids) nowCache.set(id, { d: r[id] || null, at: Date.now() });
+    for (const card of nowSeen) if (ids.includes(card.dataset.k.split(':')[1])) drawNow(card);
+  } catch {}
+  if (nowQueue.size) flushNow();
+}
+const nowIO = new IntersectionObserver(es => es.forEach(e => {
+  if (e.isIntersecting) { nowSeen.add(e.target); needNow(e.target); } else nowSeen.delete(e.target);
+}), { rootMargin: '200px 400px' });
+setInterval(() => { if (document.hidden) return; for (const c of nowSeen) c.isConnected ? needNow(c) : nowSeen.delete(c); }, 60000);
 // Afbeeldingen zacht laten infaden; kapotte logo's vervangen door initialen
 document.addEventListener('load', e => { if (e.target.tagName === 'IMG') e.target.classList.add('ld'); }, true);
 // Eigen "lui laden" van plaatjes: pas laden als een kaart bijna in beeld komt. Werkt ook in de
@@ -290,6 +327,8 @@ new MutationObserver(ms => {
     if (n.nodeType !== 1) continue;
     if (n.matches('img[data-src]')) imgIO.observe(n);
     else n.querySelectorAll('img[data-src]').forEach(i => imgIO.observe(i));
+    if (n.matches('.card.live[data-k]')) nowIO.observe(n);
+    else n.querySelectorAll('.card.live[data-k]').forEach(c => nowIO.observe(c));
     if (n.matches('[data-sy]')) yearIO.observe(n);
     else n.querySelectorAll('[data-sy]').forEach(el => yearIO.observe(el));
   }
@@ -544,9 +583,16 @@ function heroCarousel(hero, slides) {
   slides[0].onShow?.(els[0]);
   auto();
 }
-const nowPlaying = (id, el) => api('/api/epg?id=' + id).then(e => {
-  const now = e.find(x => x.s * 1000 <= Date.now() && x.e * 1000 > Date.now()) || e[0];
-  if (now) { $('.hero-kicker', el).innerHTML = '<span class="live-pill">LIVE</span> Nu op tv'; $('p', el).textContent = now.t + (now.d ? ' — ' + now.d : ''); }
+const nowPlaying = (id, el, channel) => api('/api/epg?id=' + id).then(e => {
+  const i = e.findIndex(x => x.s * 1000 <= Date.now() && x.e * 1000 > Date.now()), now = e[i];
+  if (!now) return;
+  const next = e[i + 1];
+  $('.hero-kicker', el).innerHTML = `<span class="live-pill">LIVE</span>${esc(channel || '')}`;
+  $('h1', el).textContent = now.t;
+  $('p', el).textContent = now.d || '';
+  const pct = Math.max(2, Math.min(100, (Date.now() / 1000 - now.s) / (now.e - now.s) * 100));
+  $('.hero-when', el)?.remove();
+  $('p', el).insertAdjacentHTML('beforebegin', `<div class="hero-when"><span>${hhmmOf(now.s)} – ${hhmmOf(now.e)}</span><div class="hero-prog"><i style="width:${pct.toFixed(1)}%"></i></div>${next ? `<span class="muted">Hierna: ${esc(next.t)}</span>` : ''}</div>`);
 }).catch(() => {});
 
 // ================= Pagina's =================
@@ -609,21 +655,6 @@ function topTen(type) {
     if (!list.length) return el.remove();
     shelf._list = list; shelf._type = type;
     shelf.innerHTML = list.map((x, n) => `<div class="ranked ${type === 'live' ? 'live' : 'poster'}"><span class="rank-num">${n + 1}</span>${cardHTML(type, x)}</div>`).join('');
-    // Zenders: onder de naam wat er nu op is (rustig na elkaar opgehaald). De regel staat er altijd
-    // (eventueel leeg), zodat alle zenders even hoog blijven.
-    if (type === 'live') {
-      for (const card of $$('.card[data-k]', shelf)) card.insertAdjacentHTML('beforeend', '<div class="now-t">&nbsp;</div>');
-      setTimeout(async () => {
-        for (const card of $$('.card[data-k]', shelf)) {
-          if (!card.isConnected) return;
-          try {
-            const e = await api('/api/epg?id=' + card.dataset.k.split(':')[1]);
-            const now = e.find(x => x.s * 1000 <= Date.now() && x.e * 1000 > Date.now());
-            if (now) $('.now-t', card).textContent = now.t;
-          } catch {}
-        }
-      }, 1500);
-    }
   }
   return el;
 }
@@ -657,7 +688,7 @@ async function renderLive() {
     return {
       bg: it.i, logo: true, kicker: 'Live', title: tidyName(it.n), text: '',
       actions: `<button class="btn primary" data-play="${esc(k)}">${PLAY_ICON}Kijk live</button><button class="btn glass round-btn ${isFav(k) ? 'on' : ''}" data-fav="${esc(k)}" title="Mijn lijst">${HEART}</button>`,
-      onShow: el => nowPlaying(it.id, el),
+      onShow: el => nowPlaying(it.id, el, tidyName(it.n)),
     };
   }));
   topRows('live', $('.rows-top', page));
@@ -1251,6 +1282,7 @@ async function openMovie(it) {
   heroArt($('#sheetCard .sheet-hero'), backdrops, it.i || i.movie_image || i.cover_big, 700);
   sheetExtras('vod', it, raw.youtube_trailer || i.youtube_trailer);
   const go = (start, v, rest) => playVod({ kind: 'movie', id: v ? v.id : it.id, ext: v ? v.e || 'mp4' : ext, hq: v ? !!v.hq : !!it.hq, start, duration: dur, title: tidyName(i.name || it.n), sub: (i.releasedate || '').slice(0, 4), favKey: k,
+    subInfo: { type: 'movie', name: i.o_name || i.name || it.n, year: (i.releasedate || '').slice(0, 4) || nameYearOf(it.n), tmdb: i.tmdb_id || '' },
     item: v ? { ...it, hq: v.hq, alt: rest.map(x => ({ id: x.id, e: x.e })) } : it, hist: { k, type: 'vod', id: it.id, n: it.n, i: it.i } });
   $('#mPlay').onclick = () => go(resume);
   $('#mRestart') && ($('#mRestart').onclick = () => go(0));
@@ -1308,6 +1340,7 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
     playVod({
       kind: 'series', id: e.id, ext: e.container_extension || 'mp4', start, duration: durSecs(e.info),
       title: tidyName(i.name || it.n), sub: `S${e.season} A${e.episode_num} · ${tidyName(e.title)}`, favKey: k, item: it,
+      subInfo: { type: 'series', name: i.name || it.n, year: (i.releaseDate || i.release_date || '').slice(0, 4) || nameYearOf(it.n), tmdb: i.tmdb || i.tmdb_id || '', s: e.season, e: e.episode_num },
       hist: { k, type: 'series', id: it.id, n: it.n, i: it.i, b: it.b, ep: { id: e.id, season: e.season, num: e.episode_num } },
       next: flat[idx + 1] ? () => playEp(flat[idx + 1]) : null,
       nextLabel: flat[idx + 1] ? `S${flat[idx + 1].season} A${flat[idx + 1].episode_num}` : '',
@@ -1399,7 +1432,7 @@ function closePlayer() {
   if (!P.casting) stopStreams();
   P.casting = false; P.waitFree = false;
   connMark(false);
-  stopSubs();
+  stopSubs(); clearExtSubs();
   playerEl.hidden = true; $('#pSide').hidden = true; document.body.style.overflow = '';
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   try { screen.orientation?.unlock?.(); } catch {}
@@ -1451,6 +1484,7 @@ async function attach(src, { forceNative = false } = {}) {
     video.src = src;
     video.play().catch(() => playerEl.classList.add('paused'));
   }
+  if (!P.live) refreshExt();
 }
 // ================= Instellingen in de speler (pc): slaaptimer en ondertitelgrootte =================
 let sleepTimer = null, sleepUntil = 0;
@@ -1463,6 +1497,7 @@ function openSettings() {
   const left = sleepUntil ? Math.max(1, Math.round((sleepUntil - Date.now()) / 60000)) : 0;
   const size = store.get('subSize', 'normal');
   $('#pSideList').innerHTML = `<div class="set-group"><h4>Slaaptimer${left ? ` <small>(nog ${left} min)</small>` : ''}</h4><div class="seg">${[[0, 'Uit'], [15, '15'], [30, '30'], [60, '60'], [90, '90']].map(([m, l]) => `<button data-sleep="${m}" class="${(m === 0 && !sleepUntil) ? 'active' : ''}">${l}${m ? ' min' : ''}</button>`).join('')}</div></div>
+    ${extActive() ? `<div class="set-group"><h4>Ondertitel loopt niet gelijk?</h4><div class="seg"><button data-shift="-0.5">0,5 s eerder</button><button data-shift="0.5">0,5 s later</button>${extFor(extActive()).length > 1 ? '<button data-extnext>Andere versie</button>' : ''}</div></div>` : ''}
     <div class="set-group"><h4>Ondertitelgrootte</h4><div class="seg">${SUB_SIZES.map(([k, l]) => `<button data-size="${k}" class="${k === size ? 'active' : ''}">${l}</button>`).join('')}</div></div>`;
   $$('[data-sleep]', s).forEach(b => b.onclick = () => {
     clearTimeout(sleepTimer); sleepTimer = null; sleepUntil = 0;
@@ -1472,6 +1507,8 @@ function openSettings() {
     openSettings();
   });
   $$('[data-size]', s).forEach(b => b.onclick = () => { store.set('subSize', b.dataset.size); applySubSize(); openSettings(); });
+  $$('[data-shift]', s).forEach(b => b.onclick = () => shiftExt(+b.dataset.shift));
+  $$('[data-extnext]', s).forEach(b => b.onclick = nextExt);
 }
 $('#pSettings')?.addEventListener('click', e => { e.stopPropagation(); const s = $('#pSide'); if (!s.hidden && s.dataset.mode === 'settings') s.hidden = true; else openSettings(); });
 
@@ -1526,15 +1563,82 @@ function startSubs(o, start) {
   setTimeout(pull, 1500); setTimeout(pull, 3500);
   subTimer = setInterval(pull, 8000);
 }
+
+// ---- Ondertitels van internet (OpenSubtitles): voor bijna elke film en aflevering ----
+// Heeft de film zelf geen ondertitel in jouw taal, dan wordt die van internet gebruikt. Loopt hij niet gelijk,
+// dan in Instellingen: eerder/later, of een andere versie.
+const extSubs = { o: null, list: [], pick: { nl: 0, en: 0 }, cues: {}, shift: 0, tracks: {} };
+const extFor = lang => extSubs.list.filter(s => s.lang === lang);
+function extTrack(lang) {
+  if (!extSubs.tracks[lang]) extSubs.tracks[lang] = video.addTextTrack('subtitles', SUB_LABEL[lang], lang);
+  return extSubs.tracks[lang];
+}
+function clearExtSubs() {
+  Object.assign(extSubs, { o: null, list: [], pick: { nl: 0, en: 0 }, cues: {}, shift: 0 });
+  for (const t of Object.values(extSubs.tracks)) { clearTrack(t); t.mode = 'disabled'; }
+}
+async function loadExtSubs(o) {
+  clearExtSubs();
+  const si = o.subInfo; if (!si) return;
+  extSubs.o = o;
+  const q = new URLSearchParams({ type: si.type, name: si.name || '', year: si.year || '', tmdb: si.tmdb || '', s: si.s || '', e: si.e || '' });
+  try { const l = await api('/api/subs?' + q); if (extSubs.o !== o) return; extSubs.list = l; } catch { return; }
+  applySubPref();
+}
+function parseSubs(txt) {
+  const out = [];
+  for (const block of txt.replace(/^\uFEFF/, '').split(/\r?\n\s*\r?\n/)) {
+    const lines = block.split(/\r?\n/), at = lines.findIndex(l => l.includes('-->'));
+    if (at < 0) continue;
+    const [a, b] = lines[at].split('-->');
+    const t = lines.slice(at + 1).join('\n').replace(/<[^>]+>|\{[^}]*\}/g, '').trim();
+    const s = vttTime(a), e = vttTime((b || '').trim().split(' ')[0]);
+    if (t && isFinite(s) && isFinite(e)) out.push({ s, e: Math.max(e, s + 0.5), t });
+  }
+  return out;
+}
+async function extCues(lang) {
+  if (extSubs.cues[lang]) return extSubs.cues[lang];
+  const l = extFor(lang); if (!l.length) return null;
+  const o = extSubs.o, c = l[extSubs.pick[lang] % l.length];
+  try {
+    const r = await fetch('/api/subfile?u=' + encodeURIComponent(c.url));
+    if (!r.ok) throw 0;
+    const cues = parseSubs(await r.text());
+    if (extSubs.o !== o) return null;
+    return (extSubs.cues[lang] = cues);
+  } catch { return null; }
+}
+// In de speler loopt de tijd bij omgezette films vanaf het punt waar je begon: daar rekenen we mee
+function placeExt(lang) {
+  const t = extTrack(lang); clearTrack(t);
+  const cues = extSubs.cues[lang]; if (!cues) return;
+  const off = (P.remux ? P.offset : 0) - extSubs.shift;
+  for (const c of cues) { const s = c.s - off, e = c.e - off; if (e > 0) try { t.addCue(new VTTCue(Math.max(0, s), e, c.t)); } catch {} }
+}
+const extActive = () => Object.keys(extSubs.tracks).find(l => extSubs.tracks[l].mode === 'showing');
+function refreshExt() { const l = extActive(); if (l) placeExt(l); }
+function shiftExt(d) { extSubs.shift = Math.round((extSubs.shift + d) * 10) / 10; refreshExt(); toast(`Ondertitel ${extSubs.shift > 0 ? extSubs.shift + ' s later' : extSubs.shift < 0 ? -extSubs.shift + ' s eerder' : 'zoals eerst'}`); }
+function nextExt() {
+  const l = extActive(); if (!l) return;
+  extSubs.pick[l]++; delete extSubs.cues[l];
+  extCues(l).then(c => { if (c) { placeExt(l); toast(`Ondertitel: versie ${extSubs.pick[l] % extFor(l).length + 1} van ${extFor(l).length}`); } });
+}
 function availableSubs() {
-  if (P.hls) return (P.hls.subtitleTracks || []).map((t, i) => ({ i, lang: /^(nl|nld|dut)/i.test(t.lang || t.name) ? 'nl' : /^(en|eng)/i.test(t.lang || t.name) ? 'en' : '' })).filter(x => x.lang);
-  return subAvail.map(lang => ({ lang }));
+  const own = P.hls ? (P.hls.subtitleTracks || []).map((t, i) => ({ i, lang: /^(nl|nld|dut)/i.test(t.lang || t.name) ? 'nl' : /^(en|eng)/i.test(t.lang || t.name) ? 'en' : '' })).filter(x => x.lang)
+    : subAvail.map(lang => ({ lang }));
+  // Wat de film zelf niet heeft, komt van internet
+  for (const lang of ['nl', 'en']) if (!own.some(x => x.lang === lang) && extFor(lang).length) own.push({ lang, ext: true });
+  return own;
 }
 function applySubPref() {
   const pref = subPref(), avail = availableSubs();
   const pick = pref === 'off' ? null : avail.find(x => x.lang === pref) || avail.find(x => x.lang === 'nl') || avail[0];
-  if (P.hls) { P.hls.subtitleDisplay = !!pick; P.hls.subtitleTrack = pick ? pick.i : -1; }
-  for (const [lang, t] of Object.entries(subTracks)) t.mode = !P.hls && pick?.lang === lang ? 'showing' : 'disabled';
+  const own = pick && !pick.ext ? pick : null;
+  if (P.hls) { P.hls.subtitleDisplay = !!own; P.hls.subtitleTrack = own ? own.i : -1; }
+  for (const [lang, t] of Object.entries(subTracks)) t.mode = !P.hls && own?.lang === lang ? 'showing' : 'disabled';
+  for (const [lang, t] of Object.entries(extSubs.tracks)) t.mode = pick?.ext && pick.lang === lang ? 'showing' : 'disabled';
+  if (pick?.ext) { const lang = pick.lang; extTrack(lang).mode = 'showing'; extCues(lang).then(c => { if (c && extTrack(lang).mode === 'showing') placeExt(lang); }); }
   muteForeignSubs();
   updateSubsBtn();
 }
@@ -1716,6 +1820,7 @@ function playVod(o) {
   hideSheet(); const i = layers.indexOf(hideSheet); if (i >= 0) layers.splice(i, 1);
   openPlayer();
   countView(o.favKey, o.item);
+  loadExtSubs(o);
   // iPhone + .mkv/.avi: de pc verpakt het (zonder kwaliteitsverlies) zodat Safari en AirPlay het afspelen
   if (IS_IOS && !o.url && !/^(mp4|m4v|mov|m3u8)$/i.test(o.ext) && S.session?.ffmpeg) o.url = `/play/fmp4v/${o.kind}/${o.id}.${o.ext}/index.m3u8`;
   if (IS_IOS && !o.url && !/^(mp4|m4v|mov|m3u8)$/i.test(o.ext)) {

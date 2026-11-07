@@ -136,7 +136,7 @@ input:focus { background: #232325; }
 .row-title h3 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-title .chev { width: 20px; height: 20px; color: var(--muted); stroke-width: 2.4; transition: transform .2s var(--ease), color .2s; }
 button.row-title:hover .chev { transform: translateX(3px); color: #fff; }
-.shelf { display: flex; gap: 16px; overflow-x: auto; overflow-y: visible; scroll-snap-type: x proximity; padding: 12px var(--gutter) 20px; scroll-padding: 0 var(--gutter); scrollbar-width: none; overscroll-behavior-x: contain; }
+.shelf { display: flex; gap: 16px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; padding: 12px var(--gutter) 20px; scroll-padding: 0 var(--gutter); scrollbar-width: none; overscroll-behavior-x: contain; }
 .shelf::-webkit-scrollbar { display: none; }
 .shelf > * { scroll-snap-align: start; }
 .sentinel { flex: none; width: 1px; }
@@ -176,7 +176,7 @@ button.row-title:hover .chev { transform: translateX(3px); color: #fff; }
 
 /* ---------- Landen-kiezer ---------- */
 .chips-bar { position: sticky; top: 70px; z-index: 20; padding: 12px 0 10px; margin-top: 14px; background: linear-gradient(rgba(0,0,0,.94) 70%, rgba(0,0,0,0)); }
-.chips, .seasons { display: flex; gap: 8px; overflow-x: auto; padding: 4px var(--gutter); scrollbar-width: none; }
+.chips, .seasons { display: flex; gap: 8px; overflow-x: auto; overflow-y: hidden; padding: 4px var(--gutter); scrollbar-width: none; }
 .chips::-webkit-scrollbar, .seasons::-webkit-scrollbar { display: none; }
 .chip { flex: none; padding: 8px 16px; border-radius: 999px; background: var(--card); font-weight: 600; font-size: 14px; color: rgba(255,255,255,.8); transition: background .2s, color .2s; }
 .chip:hover { background: var(--card-2); color: #fff; }
@@ -826,6 +826,17 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 .top10 .ranked:nth-child(1) .rank-num { background: linear-gradient(180deg, #ffe17a, rgba(255,214,10,.15)); -webkit-background-clip: text; background-clip: text; }
 .top10 .ranked:nth-child(2) .rank-num { background: linear-gradient(180deg, #f2f4f8, rgba(220,225,235,.15)); -webkit-background-clip: text; background-clip: text; }
 .top10 .ranked:nth-child(3) .rank-num { background: linear-gradient(180deg, #f0b07a, rgba(214,140,80,.15)); -webkit-background-clip: text; background-clip: text; }
+/* Nu op tv (zenders) */
+.card .now-t { font-size: 12.5px; color: var(--muted); margin-top: 2px; height: 17px; line-height: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card.live .now-bar { position: absolute; left: 10px; right: 10px; bottom: 8px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.2); overflow: hidden; z-index: 1; }
+.card.live .now-bar i { display: block; height: 100%; border-radius: inherit; background: rgba(255,255,255,.9); }
+.hero-when { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin: -4px 0 14px; font-size: 14px; font-weight: 600; }
+.hero-when .muted { font-weight: 500; opacity: .75; }
+.hero-prog { width: 140px; height: 4px; border-radius: 2px; background: rgba(127,127,127,.35); overflow: hidden; }
+.hero-prog i { display: block; height: 100%; background: currentColor; border-radius: inherit; }
+/* Lichte stand: zenderlogo's zijn vaak wit, dus de tegel blijft donker (zoals op tv) */
+[data-theme="light"] .card.live .art { background: radial-gradient(120% 120% at 30% 0%, #3b3b44, #1b1b1f 72%) !important; }
+[data-theme="light"] .card.live .initials { color: rgba(255,255,255,.7); }
 .top10 .card .now-t { font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 [data-theme="light"] .top10 .ranked.live .card .art { background: linear-gradient(160deg, #fff, #eceef3); box-shadow: 0 0 0 .5px rgba(0,0,0,.08), 0 8px 20px rgba(0,0,0,.08); }
 
@@ -887,3 +898,11 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
   background: rgba(255,159,10,.95); color: #1d1300; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
 .expiry-bar span { flex: 1; }
 .expiry-bar button { font-size: 22px; line-height: 1; padding: 0 4px; color: inherit; }
+
+/* Telefoon: Live-banner met programmatitel. Logo kleiner en hoger (niet over de titel), bolletjes onder de knoppen */
+@media (max-width: 760px) {
+  .hero-bg.logo { background-size: 30vw; background-position: 50% 14%; }
+  .hero-when { font-size: 13px; margin: -6px 0 10px; gap: 6px 12px; }
+  .hero-prog { width: 90px; }
+  [data-theme="light"] .hero-dots, .hero-dots { bottom: 72px; }
+}

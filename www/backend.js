@@ -421,6 +421,59 @@ async function artFor(type, ids, names = {}) {
   return out;
 }
 
+// ---------- Ondertitels van internet: OpenSubtitles (via de openbare Stremio-dienst, zonder account) ----------
+// Heeft een film of aflevering zelf geen (Nederlandse) ondertitel, dan deze. Eerst het IMDb-nummer opzoeken
+// (JustWatch), dan per taal een paar ondertitels. Nederlands en Engels.
+const JW_IDS = `query S($q: String!) { popularTitles(country: NL, first: 8, filter: { searchQuery: $q }) {
+  edges { node { objectType content(country: NL, language: "nl") { title originalTitle originalReleaseYear externalIds { imdbId tmdbId } } } } } }`;
+const SUB_HOST = /^https:\/\/[\w.-]+\.strem\.io\//;
+async function imdbOf(type, name, year, tmdb) {
+  const q = tidyTitle(name); if (!q) return '';
+  year = Number(year) || nameYear(name);
+  return cached(`imdb:${type}:${popKey(name)}:${year}:${tmdb || ''}`, async () => {
+    const r = await fetch('https://apis.justwatch.com/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(10000), body: JSON.stringify({ query: JW_IDS, variables: { q } }) });
+    if (!r.ok) throw new Error('JustWatch ' + r.status);
+    const want = type === 'series' ? 'SHOW' : 'MOVIE';
+    const hits = ((await r.json()).data?.popularTitles?.edges || []).map(e => e.node).filter(n => n.objectType === want && n.content?.externalIds?.imdbId);
+    const key = popKey(q);
+    const same = n => popKey(n.content.title || '') === key || popKey(n.content.originalTitle || '') === key;
+    const near = n => !year || Math.abs((n.content.originalReleaseYear || 0) - year) <= 1;
+    const hit = (tmdb && hits.find(n => String(n.content.externalIds.tmdbId) === String(tmdb))) || hits.find(n => same(n) && near(n)) || (!year && hits.find(same));
+    return hit ? hit.content.externalIds.imdbId : '';
+  }, true);
+}
+async function subtitleList(type, name, year, tmdb, season, episode) {
+  const imdb = await imdbOf(type, name, year, tmdb).catch(() => '');
+  if (!imdb) return [];
+  const id = type === 'series' ? `series/${imdb}:${Number(season) || 1}:${Number(episode) || 1}` : `movie/${imdb}`;
+  const list = await cached('osub:' + id, async () => {
+    const r = await fetch(`https://opensubtitles-v3.strem.io/subtitles/${id}.json`, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error('ondertitels ' + r.status);
+    return (await r.json()).subtitles || [];
+  }, true);
+  const out = [], per = { nl: 0, en: 0 };
+  for (const s of list) {
+    const lang = /^(nld|dut)$/.test(s.lang) ? 'nl' : s.lang === 'eng' ? 'en' : '';
+    if (!lang || per[lang] >= 4 || !SUB_HOST.test(s.url || '')) continue;
+    per[lang]++; out.push({ lang, url: s.url });
+  }
+  return out;
+}
+
+// ---------- Nu op tv: per zender wat er nu is en wat er hierna komt (voor de kaarten bij Live TV) ----------
+async function epgNow(ids) {
+  const out = {};
+  await Promise.all(ids.slice(0, 40).map(async id => {
+    try {
+      const j = await cached('epg:' + id, () => api({ action: 'get_short_epg', stream_id: id, limit: 4 }));
+      const l = (j.epg_listings || []).map(e => ({ t: decodeB64(e.title), s: Number(e.start_timestamp), e: Number(e.stop_timestamp) }));
+      const now = Date.now() / 1000, i = l.findIndex(x => x.s <= now && x.e > now);
+      if (i >= 0) out[id] = { t: l[i].t, s: l[i].s, e: l[i].e, n: l[i + 1]?.t || '' };
+    } catch {}
+  }));
+  return out;
+}
+
 // ---------- Live: één beste versie per zender, ingedeeld in kopjes ----------
 // Gemeten (okt 2026): niets is echt 4K/8K/16K. Odido = 1080p50 H.264 ~6,6 Mbps (beste en werkt overal),
 // "HD Nederland" = 1080p50 HEVC ~2,5 Mbps, 16K/4K/8K = 1080p ~2-3 Mbps, SD = 540p.
@@ -976,6 +1029,8 @@ async function route(url, init) {
       return { active: Number(u.active_cons) || 0, max: Number(u.max_connections) || 0 };
     } catch { return { active: -1, max: 0 }; }
   }
+  if (p === '/api/subs') return subtitleList(q.type === 'series' ? 'series' : 'movie', q.name || '', q.year, q.tmdb, q.s, q.e).catch(() => []);
+  if (p === '/api/epgnow') return epgNow(String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)));
   if (p === '/api/extra') return titleExtra(q.type === 'series' ? 'series' : 'vod', q.name || '').catch(() => ({ imdb: 0, similar: [] }));
   if (p === '/api/epg') {
     const j = await cached('epg:' + q.id, () => api({ action: 'get_short_epg', stream_id: q.id, limit: 3 }), false, 5 * 60e3);

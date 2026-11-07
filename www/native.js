@@ -42,7 +42,7 @@ async function withVLC(o) {
     pip: pos => { if (!AV) return; toast('Tik op het beeld-in-beeld-knopje in de speler'); withApple(forApple({ ...o, start: pos > 5 ? pos : o.start || 0 })); },
     // Andere ondertitelgrootte gekozen: dezelfde film op dezelfde plek opnieuw openen
     reload: pos => withVLC({ ...o, start: o.live ? 0 : pos }) };
-  try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live, series: !!o.series, nextTitle: o.nextTitle || '', castFirst: !!o.castFirst }); }
+  try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live, series: !!o.series, nextTitle: o.nextTitle || '', castFirst: !!o.castFirst, run: o.run || 0 }); }
   catch { cur = null; connMark(false); toast('Afspelen lukt niet'); }
 }
 async function withApple(o) {
@@ -138,6 +138,15 @@ playVod = function (o) {
   const run = ++playRun;
   // "Op tv" gekozen: in de speler meteen de Chromecast-keuze tonen (VLC; Apple's speler heeft zelf AirPlay)
   const castFirst = typeof castNext !== 'undefined' && castNext; if (castFirst) castNext = false;
+  // Ondertitels van internet (Nederlands en Engels) opzoeken terwijl de film start; VLC gebruikt ze als de film
+  // zelf er geen heeft in jouw taal
+  if (o.subInfo && VLC) {
+    const si = o.subInfo, q = new URLSearchParams({ type: si.type, name: si.name || '', year: si.year || '', tmdb: si.tmdb || '', s: si.s || '', e: si.e || '' });
+    fetch('/api/subs?' + q).then(r => r.json()).then(l => {
+      const by = {}; for (const s of l || []) if (!by[s.lang]) by[s.lang] = s.url;
+      if (Object.keys(by).length) VLC.setSubs({ run, ...by }).catch(() => {});
+    }).catch(() => {});
+  }
   const tryIdx = async i => {
     if (run !== playRun) return;
     let s = sources[i];
@@ -167,11 +176,8 @@ playVod = function (o) {
     if (i > 0) toast('Andere versie geprobeerd');
     const t0 = Date.now();
     let played = false;
-    // Ondertiteling uit: altijd VLC, die luistert daarnaar. Apple's speler zet ingebouwde ondertitels soms zelf aan
-    const subsOff = await VLC?.subtitlePref?.().then(r => r.value === 'off', () => false);
-    if (run !== playRun) return;
     play({
-      url, title: o.title, sub: o.sub || '', start: o.start || 0,
+      url, title: o.title, sub: o.sub || '', start: o.start || 0, run,
       series: o.kind === 'series', nextTitle: o.next ? (o.nextLabel || 'volgende') : '', castFirst,
       exit: (pos, dur, user) => {
         if (!user && pos < 0.5 && Date.now() - t0 < 45000 && !played) return tryIdx(i + 1);
@@ -180,7 +186,7 @@ playVod = function (o) {
       // Tussendoor bewaren (elke 10 s): ook als de app wordt afgesloten of de telefoon uitvalt, weet hij waar je was
       progress: (pos, dur) => { played = true; if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || o.duration || 0 }); },
       ended: () => { if (o.hist) saveHist({ ...o.hist, pos: o.duration || 0, dur: o.duration || 0 }); if (o.next) setTimeout(o.next, 600); },
-    }, castFirst || subsOff || (!s.url && (!APPLE_EXT.test(s.e || '') || s.hq)));
+    }, true);
   };
   tryIdx(0);
 };
