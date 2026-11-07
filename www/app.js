@@ -2248,9 +2248,9 @@ function expiryReminder() {
 // ================= Schermen in gebruik (linksboven) =================
 // Live: wie er nu echt kijkt op je abonnement. De aanbieder telt elk apparaat; dit apparaat zelf tellen we niet mee,
 // ook niet in de tijd dat de aanbieder een net gestopte verbinding nog vasthoudt.
-// Vasthouden door de aanbieder (gemeten): live (.ts) ~3 s, .m3u8 ruim een minuut, een film of aflevering ~15 minuten.
+// Vasthouden door de aanbieder (gemeten): live (.ts) ~3 s, .m3u8 ruim een minuut, een film of aflevering ~5 minuten.
 // Dat laatste kan de app niet korter maken: de aanbieder ziet niet wanneer je een film stopt en wacht zelf af.
-const CONN_POLL = 4000, CONN_LINGER = 75000, CONN_FILM = 17 * 60e3, CONN_SETTLE = 12000;
+const CONN_POLL = 4000, CONN_LINGER = 75000, CONN_FILM = 6 * 60e3, CONN_SETTLE = 12000;
 let connPlaying = false, connStart = 0, connFails = 0, connBusy = false;
 let connSelf = store.get('connSelf', null); // { t: laatst gezien, before: telling terwijl dit apparaat keek, film }
 function connMark(on, film) {
@@ -2278,7 +2278,7 @@ function showConns(active, max) {
   const who = n === 0 ? 'Niemand kijkt' : `${n} ${n === 1 ? 'scherm kijkt' : 'schermen kijken'}`;
   const at = held ? new Date(held).toTimeString().slice(0, 5) : '';
   $('span', pill).textContent = `${who} · ${free > 0 ? free + ' vrij' : 'vol'}${held ? (free > 0 ? `, ${free + 1} om ${at}` : `, 1 vrij om ${at}`) : ''}`;
-  pill.title = held ? 'Je laatste film houdt bij de aanbieder nog even een scherm vast (ongeveer een kwartier na het stoppen). Dat bepaalt de aanbieder, niet de app.' : 'Schermen die nu kijken op je abonnement';
+  pill.title = held ? 'Je laatste film houdt bij de aanbieder nog even een scherm vast (ongeveer 5 minuten na het stoppen). Dat bepaalt de aanbieder, niet de app.' : 'Schermen die nu kijken op je abonnement';
 }
 async function updateConns() {
   if (connBusy || !$('#connPill') || !S.session || (document.hidden && !connPlaying)) return;

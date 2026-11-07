@@ -65,7 +65,7 @@ const play = (o, preferVLC) => (preferVLC || !AV) && VLC ? withVLC(o) : withAppl
 // Films: alleen de eerste 2 bytes opvragen (de aanbieder kent geen HEAD). Afspeellijsten (.m3u8): ook het eerste stukje erachter controleren,
 // want bij de "HQ"-versies werkt de lijst vaak wel maar de server met het beeld niet.
 const within = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('traag')), ms))]);
-// Elke doorverwijzing van de aanbieder telt als een apart scherm (en blijft ~15 min staan): daarom speelt VLC
+// Elke doorverwijzing van de aanbieder telt als een apart scherm (en blijft na het stoppen nog minuten staan): daarom speelt VLC
 // daarna het adres waar al naartoe verwezen is, zodat een film maar één scherm gebruikt
 const finalURL = new Map();
 async function alive(url, depth = 0) {
