@@ -18,7 +18,7 @@ let cur = null;
 const done = (pos, ended, dur, user) => {
   const c = cur; cur = null; if (!c) return;
   if (ended) c.ended?.(); else c.exit?.(pos, dur, user);
-  connMark(false);
+  connMark(false, !c.live);
 };
 // Apple's speler: was de film geladen (klaar om te spelen)? Dan is sluiten altijd jouw keuze
 AV?.addListener('jeepCapVideoPlayerReady', () => { if (cur) cur.ready = true; if (cur?.start > 5) AV.setCurrentTime({ playerId: 'fullscreen', seektime: cur.start }).catch(() => {}); });
@@ -65,10 +65,14 @@ const play = (o, preferVLC) => (preferVLC || !AV) && VLC ? withVLC(o) : withAppl
 // Films: alleen de eerste 2 bytes opvragen (de aanbieder kent geen HEAD). Afspeellijsten (.m3u8): ook het eerste stukje erachter controleren,
 // want bij de "HQ"-versies werkt de lijst vaak wel maar de server met het beeld niet.
 const within = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('traag')), ms))]);
+// Elke doorverwijzing van de aanbieder telt als een apart scherm (en blijft ~15 min staan): daarom speelt VLC
+// daarna het adres waar al naartoe verwezen is, zodat een film maar één scherm gebruikt
+const finalURL = new Map();
 async function alive(url, depth = 0) {
   try {
     const playlist = /\.m3u8(\?|$)/i.test(url) || depth > 0;
     const r = await within(fetch(url, playlist ? {} : { headers: { Range: 'bytes=0-1' } }), depth ? 3000 : 4000);
+    if (!depth && r.url && r.url !== url && r.status < 400) finalURL.set(url, r.url);
     if (r.status === 404 || r.status === 410 || r.status >= 500) return false;
     if (!playlist || r.status >= 400 || depth >= 2) return r.status < 400 || r.status === 405;
     const text = await within(r.text(), 3000);
@@ -170,8 +174,9 @@ playVod = function (o) {
       if (first) { first.tried = true; sources.push({ ...first, dead: false, forced: true }); return tryIdx(i); }
       toast('Deze film/aflevering werkt nu niet. Probeer het later opnieuw.'); return;
     }
-    const url = s.url || src(o.kind, s.id, s.e);
+    let url = s.url || src(o.kind, s.id, s.e);
     if (!s.url && !s.forced && !(await alive(url))) { s.dead = true; return tryIdx(i + 1); }
+    url = finalURL.get(url) || url;
     if (run !== playRun) return;
     if (i > 0) toast('Andere versie geprobeerd');
     const t0 = Date.now();

@@ -1431,7 +1431,7 @@ function closePlayer() {
   destroyEngines();
   if (!P.casting) stopStreams();
   P.casting = false; P.waitFree = false;
-  connMark(false);
+  connMark(false, !P.live);
   stopSubs(); clearExtSubs();
   playerEl.hidden = true; $('#pSide').hidden = true; document.body.style.overflow = '';
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -2248,31 +2248,37 @@ function expiryReminder() {
 // ================= Schermen in gebruik (linksboven) =================
 // Live: wie er nu echt kijkt op je abonnement. De aanbieder telt elk apparaat; dit apparaat zelf tellen we niet mee,
 // ook niet in de tijd dat de aanbieder een net gestopte verbinding nog vasthoudt.
-const CONN_POLL = 4000, CONN_LINGER = 75000, CONN_SETTLE = 12000; // vasthouden: .ts ~3 s, .m3u8 ruim een minuut
+// Vasthouden door de aanbieder (gemeten): live (.ts) ~3 s, .m3u8 ruim een minuut, een film of aflevering ~15 minuten.
+// Dat laatste kan de app niet korter maken: de aanbieder ziet niet wanneer je een film stopt en wacht zelf af.
+const CONN_POLL = 4000, CONN_LINGER = 75000, CONN_FILM = 17 * 60e3, CONN_SETTLE = 12000;
 let connPlaying = false, connStart = 0, connFails = 0, connBusy = false;
-let connSelf = store.get('connSelf', null); // { t: laatst gezien, before: telling terwijl dit apparaat keek }
-function connMark(on) {
+let connSelf = store.get('connSelf', null); // { t: laatst gezien, before: telling terwijl dit apparaat keek, film }
+function connMark(on, film) {
   if (on === connPlaying) return;
   connPlaying = on; connStart = Date.now();
-  connSelf = on ? null : { t: Date.now(), before: connSelf?.before || 0 };
+  connSelf = on ? null : { t: Date.now(), before: connSelf?.before || 0, film: !!film };
   store.set('connSelf', connSelf);
   setTimeout(updateConns, on ? 0 : 800);
 }
+// Hoeveel andere apparaten kijken, en houdt de aanbieder nog een scherm vast van wat je hier net keek?
 function connOthers(active) {
-  if (connPlaying) return Math.max(0, active - 1);
-  const s = connSelf; if (!s) return active;
-  const age = Date.now() - s.t;
-  if (s.before ? age < CONN_LINGER && active >= s.before : age < CONN_SETTLE) return Math.max(0, active - 1);
+  if (connPlaying) return { n: Math.max(0, active - 1), held: 0 };
+  const s = connSelf; if (!s) return { n: active, held: 0 };
+  const age = Date.now() - s.t, limit = s.film ? CONN_FILM : CONN_LINGER;
+  if (active > 0 && (s.before ? age < limit && active >= s.before : age < CONN_SETTLE)) return { n: active - 1, held: s.film ? s.t + CONN_FILM : 0 };
   connSelf = null; store.set('connSelf', null); // eigen verbinding is weg: vanaf nu telt alles
-  return active;
+  return { n: active, held: 0 };
 }
 function showConns(active, max) {
   const pill = $('#connPill'); if (!pill) return;
-  const n = Math.min(connOthers(active), max), free = max - n;
+  const { n, held } = connOthers(active), free = Math.max(0, max - active);
   pill.hidden = false;
   pill.classList.toggle('full', free <= 0);
-  pill.classList.toggle('free', n === 0);
-  $('span', pill).textContent = n === 0 ? `Niemand kijkt · ${max} vrij` : `${n} ${n === 1 ? 'scherm kijkt' : 'schermen kijken'} · ${free > 0 ? free + ' vrij' : 'vol'}`;
+  pill.classList.toggle('free', n === 0 && free > 0);
+  const who = n === 0 ? 'Niemand kijkt' : `${n} ${n === 1 ? 'scherm kijkt' : 'schermen kijken'}`;
+  const at = held ? new Date(held).toTimeString().slice(0, 5) : '';
+  $('span', pill).textContent = `${who} · ${free > 0 ? free + ' vrij' : 'vol'}${held ? (free > 0 ? `, ${free + 1} om ${at}` : `, 1 vrij om ${at}`) : ''}`;
+  pill.title = held ? 'Je laatste film houdt bij de aanbieder nog even een scherm vast (ongeveer een kwartier na het stoppen). Dat bepaalt de aanbieder, niet de app.' : 'Schermen die nu kijken op je abonnement';
 }
 async function updateConns() {
   if (connBusy || !$('#connPill') || !S.session || (document.hidden && !connPlaying)) return;
