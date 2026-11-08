@@ -2114,7 +2114,7 @@ $('#accountBtn').onclick = async () => {
   showSheet(`<div class="account">
     <div class="acc-head">${avatarHTML(S.profile, 'lg')}<div><h2>${esc(S.profile.name)}</h2><button class="link" id="switchProfile">Wissel van profiel</button></div></div>
 
-    ${S.session?.app ? '' : `<div class="group">
+    ${S.session?.app || matchMedia('(max-width: 760px)').matches ? '' : `<div class="group">
       <h3>Op je telefoon</h3>
       ${lan ? `<div class="qr-row"><div class="qr" id="qr"></div><ol>
         <li>Zet je telefoon op dezelfde wifi als deze pc.</li>
@@ -2284,8 +2284,7 @@ function showConns(active, max) {
   pill.classList.toggle('full', free <= 0);
   pill.classList.toggle('free', n === 0 && free > 0);
   const who = n === 0 ? 'Niemand kijkt' : `${n} ${n === 1 ? 'scherm kijkt' : 'schermen kijken'}`;
-  const at = held ? new Date(held).toTimeString().slice(0, 5) : '';
-  $('span', pill).textContent = `${who} · ${free > 0 ? free + ' vrij' : 'vol'}${held ? (free > 0 ? `, ${free + 1} om ${at}` : `, 1 vrij om ${at}`) : ''}`;
+  $('span', pill).textContent = `${who} · ${free > 0 ? free + ' vrij' : 'vol'}`; // alleen hoeveel er nu vrij zijn
   pill.title = held ? 'Je laatste film houdt bij de aanbieder nog even een scherm vast (ongeveer 5 minuten na het stoppen). Dat bepaalt de aanbieder, niet de app.' : 'Schermen die nu kijken op je abonnement';
 }
 async function updateConns() {

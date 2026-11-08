@@ -909,3 +909,21 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
   .hero-prog { width: 90px; }
   [data-theme="light"] .hero-dots, .hero-dots { bottom: 72px; }
 }
+
+/* Telefoon: knoppen op een detailpagina netjes in een raster (grote knop + instellingen boven, de rest twee aan twee) */
+@media (max-width: 760px) {
+  .sheet .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+  .sheet .hero-actions > .btn { flex: 1 1 calc(50% - 5px); min-width: 0; justify-content: center; margin: 0; }
+  .sheet .hero-actions > .btn.primary { flex: 1 1 calc(100% - 58px); order: 0; }
+  .sheet .hero-actions > .round { flex: 0 0 48px; height: 48px; order: 1; margin: 0; }
+  .sheet .hero-actions > .btn:not(.primary) { order: 2; }
+}
+/* Lange titels in de grote banner: hoogstens twee regels */
+.hero h1 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; padding-bottom: .06em; }
+@media (max-width: 760px) { .hero h1 { font-size: 30px; line-height: 1.08; } }
+/* Touchscreen: geen "hover" die na een tik blijft hangen (anders lijkt de vorige tab nog gekozen) */
+@media (hover: none) {
+  .nav-pill button:hover:not(.active) { color: rgba(255,255,255,.48); }
+  [data-theme="light"] .nav-pill button:hover:not(.active) { color: rgba(0,0,0,.45); }
+  .btn:hover, .nav-account:hover, .fav-badge:hover, .prog:hover, .all-btn:hover { transform: none; }
+}

@@ -119,7 +119,7 @@ const chanKey = s => { const k = channelName(s).toUpperCase().replace(/[^A-Z0-9+
 // Taallabel uit de titel: "[NL] Wonder (2017)" → NL, "[NL : NETFLIX ] …" → NL
 const langTag = s => (String(s || '').match(/^\s*\[\s*([A-Z]{2,4})\b/) || [])[1] || '';
 // Zelfde film/serie in een andere versie (punt erachter, HQ, ander taallabel) → zelfde sleutel
-const titleKey = n => fold(n).replace(/\[[^\]]*\]/g, '').replace(/\b(hq|qhd|4k|uhd|fhd|nl gesproken|dubbed|cam versie|hdcam|cam|telesync|hdts)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const titleKey = n => fold(n).replace(/\[[^\]]*\]/g, '').replace(/\b(hq|qhd|4k|uhd|fhd|nl gesproken|dubbed|cam versie|hdcam|cam|telesync|hdts)\b/g, '').replace(/\b(480|576|720|1080|2160)p\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\b((19|20)\d\d) (de|en|fr|nl|es|it|tr|pl|pt|ger|eng)$/, '$1');
 
 async function categories(type) {
   const action = { live: 'get_live_categories', vod: 'get_vod_categories', series: 'get_series_categories' }[type];
@@ -232,9 +232,25 @@ function versionScore(x, nlSet) {
 function bestVersion(versions, nlSet) {
   return versions.reduce((a, b) => versionScore(b, nlSet) > versionScore(a, nlSet) ? b : a);
 }
+// Losse sleutel: zonder jaartal, (SUB) en spaties, zodat "Batmanvs Two Face" en "Batman vs. Two-Face (2017)" bij elkaar horen
+const looseKey = k => k.replace(/\b(19|20)\d\d\b/g, '').replace(/\b(sub|subs|subbed)\b/g, '').replace(/ /g, '');
+const yearOfKey = k => (k.match(/\b(19|20)\d\d\b/) || [])[0] || '';
+// Titels zonder jaartal bij de versie mét jaartal voegen, maar alleen als er precies één jaartal is (remakes blijven apart)
+function looseMerge(g, merge) {
+  const buckets = new Map();
+  for (const [k, v] of g) { const l = looseKey(k); if (!l) continue; if (!buckets.has(l)) buckets.set(l, []); buckets.get(l).push([k, v]); }
+  for (const list of buckets.values()) {
+    if (list.length < 2) continue;
+    const years = new Set(list.map(([k]) => yearOfKey(k)).filter(Boolean));
+    if (years.size > 1) continue;
+    const [k0, v0] = list.find(([k]) => yearOfKey(k)) || list[0];
+    for (const [k, v] of list) if (k !== k0) { merge(v0, v); g.delete(k); }
+  }
+}
 function dedupe(items, nlSet) {
   const g = new Map();
   for (const x of items) { const k = titleKey(x.n); if (!g.has(k)) g.set(k, []); g.get(k).push(x); }
+  looseMerge(g, (into, from) => into.push(...from));
   return [...g.values()].map(v => {
     const best = bestVersion(v, nlSet);
     if (v.length < 2) return best;
@@ -753,6 +769,7 @@ async function search(query, sort = 'match') {
         const g = groups.get(k) || { v: [], s: 0 };
         g.v.push(x); g.s = Math.max(g.s, s); groups.set(k, g);
       }
+      looseMerge(groups, (into, from) => { into.v.push(...from.v); into.s = Math.max(into.s, from.s); });
       hits = [...groups.values()].map(g => { const x = bestVersion(g.v, nlSet); return { ...x, nl: nlSet.has(x.c) ? 1 : 0, base: g.s }; });
     }
     for (const x of hits) { x.score = x.base + x.nl * 12; x.v = t === 'live' ? viewTrend(`live:${x.id}`) : popScore(t, x); delete x.base; }
