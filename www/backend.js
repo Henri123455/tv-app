@@ -468,7 +468,7 @@ async function epgNow(ids) {
       const j = await cached('epg:' + id, () => api({ action: 'get_short_epg', stream_id: id, limit: 4 }));
       const l = (j.epg_listings || []).map(e => ({ t: decodeB64(e.title), s: Number(e.start_timestamp), e: Number(e.stop_timestamp) }));
       const now = Date.now() / 1000, i = l.findIndex(x => x.s <= now && x.e > now);
-      if (i >= 0) out[id] = { t: l[i].t, s: l[i].s, e: l[i].e, n: l[i + 1]?.t || '' };
+      if (i >= 0) out[id] = { t: l[i].t, s: l[i].s, e: l[i].e, n: l.slice(i + 1).find(x => x.t && x.t !== l[i].t)?.t || '' };
     } catch {}
   }));
   return out;

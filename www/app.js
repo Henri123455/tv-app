@@ -592,7 +592,7 @@ function heroCarousel(hero, slides) {
 const nowPlaying = (id, el, channel) => api('/api/epg?id=' + id).then(e => {
   const i = e.findIndex(x => x.s * 1000 <= Date.now() && x.e * 1000 > Date.now()), now = e[i];
   if (!now) return;
-  const next = e[i + 1];
+  const next = e.slice(i + 1).find(x => x.t && x.t !== now.t);
   $('.hero-kicker', el).innerHTML = `<span class="live-pill">LIVE</span>${esc(channel || '')}`;
   $('h1', el).textContent = now.t;
   $('p', el).textContent = now.d || '';

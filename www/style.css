@@ -587,7 +587,7 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 @media (max-width: 760px) {
   body::before { content: ""; position: fixed; z-index: 35; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); background: rgba(0,0,0,.92); pointer-events: none; }
   [data-theme="light"] body::before { background: rgba(245,245,247,.95); }
-  .top-pad { padding-top: calc(env(safe-area-inset-top) + 20px); }
+  .top-pad { padding-top: calc(max(14px, env(safe-area-inset-top)) + 44px); } /* ruimte voor het verbindingslabel */
   .page-title { padding-right: 52px; }
   .nav-account { transition: opacity .2s; }
   .nav.scrolled .nav-account { opacity: 0; pointer-events: none; }
@@ -665,6 +665,9 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
   .nav-account .avatar { box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 4px 14px rgba(0,0,0,.4); }
 }
 [data-theme="light"] .chip:not(.ghost), [data-theme="light"] .seg, [data-theme="light"] .group { background: linear-gradient(180deg, #fff, rgba(255,255,255,.7)); box-shadow: inset 0 1px 0 #fff, 0 0 0 .5px rgba(0,0,0,.08), 0 2px 8px rgba(0,0,0,.05); }
+/* Gekozen chip altijd goed leesbaar (de glas-achtergrond hierboven overschreef hem) */
+.chip.active:not(.ghost) { background: linear-gradient(180deg, #fff, #e9e9ee); color: #000; }
+[data-theme="light"] .chip.active:not(.ghost) { background: #1d1d1f; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
 [data-theme="light"] .card .art::before { background: linear-gradient(155deg, rgba(255,255,255,.3), rgba(255,255,255,0) 32%); }
 @media (hover: none) and (pointer: coarse) {
   [data-theme="light"] .nav-pill { background: linear-gradient(180deg, rgba(255,255,255,.97), rgba(242,242,246,.97)); box-shadow: inset 0 .5px 0 rgba(0,0,0,.12); }
