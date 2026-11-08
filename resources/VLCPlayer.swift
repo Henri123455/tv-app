@@ -830,7 +830,9 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             best[lang] = (score, i.int32Value)
         }
         var out = best.map { (name: $0.key == "nl" ? "Nederlands" : "English", index: $0.value.index, lang: $0.key) }
-        for lang in ["nl", "en"] where best[lang] == nil && external[lang] != nil {
+        // Heeft de film zelf ondertitels (Nederlands of Engels)? Dan alleen die, zoals vroeger. Die van internet
+        // alleen voor films en afleveringen zonder eigen ondertitels.
+        for lang in ["nl", "en"] where best.isEmpty && external[lang] != nil {
             out.append((name: lang == "nl" ? "Nederlands" : "English", index: externalIdx[lang] ?? -2, lang: lang))
         }
         return out.sorted { $0.lang == "nl" && $1.lang != "nl" }
@@ -854,6 +856,15 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         let choices = subtitleChoices()
         let pref = UserDefaults.standard.string(forKey: Self.prefKey) ?? "nl"
         if pref != "off", let pick = choices.first(where: { $0.lang == pref }) ?? choices.first {
+            // Eerst een paar seconden kijken of de film eigen ondertitels heeft; pas daarna die van internet
+            if pick.index == -2 && player.time.intValue < 5000 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                    guard let self = self, !self.finished else { return }
+                    self.applySubtitles()
+                }
+                buildSubtitleMenu(choices)
+                return
+            }
             if pick.index == -2 { loadExternal(pick.lang) } else { player.currentVideoSubTitleIndex = pick.index }
         } else {
             player.currentVideoSubTitleIndex = -1 // geen ondertitel (ook geen andere taal)

@@ -1633,8 +1633,8 @@ function nextExt() {
 function availableSubs() {
   const own = P.hls ? (P.hls.subtitleTracks || []).map((t, i) => ({ i, lang: /^(nl|nld|dut)/i.test(t.lang || t.name) ? 'nl' : /^(en|eng)/i.test(t.lang || t.name) ? 'en' : '' })).filter(x => x.lang)
     : subAvail.map(lang => ({ lang }));
-  // Wat de film zelf niet heeft, komt van internet
-  for (const lang of ['nl', 'en']) if (!own.some(x => x.lang === lang) && extFor(lang).length) own.push({ lang, ext: true });
+  // Heeft de film zelf ondertitels, dan alleen die (zoals vroeger). Internet alleen voor films zonder eigen ondertitels.
+  if (!own.length) for (const lang of ['nl', 'en']) if (extFor(lang).length) own.push({ lang, ext: true });
   return own;
 }
 function applySubPref() {

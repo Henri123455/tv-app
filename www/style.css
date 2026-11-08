@@ -927,3 +927,8 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
   [data-theme="light"] .nav-pill button:hover:not(.active) { color: rgba(0,0,0,.45); }
   .btn:hover, .nav-account:hover, .fav-badge:hover, .prog:hover, .all-btn:hover { transform: none; }
 }
+/* Telefoon: slider-bolletjes altijd onder de knoppen (niet over de hartknop), en het zenderlogo onder het verbindingslabel */
+@media (max-width: 760px) {
+  [data-theme] .hero-dots, .hero-dots { bottom: 16px; left: 0; right: 0; justify-content: center; }
+  .hero-bg.logo { background-position: center max(74px, calc(env(safe-area-inset-top) + 62px)); }
+}
