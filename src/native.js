@@ -42,7 +42,7 @@ async function withVLC(o) {
     pip: pos => { if (!AV) return; toast('Tik op het beeld-in-beeld-knopje in de speler'); withApple(forApple({ ...o, start: pos > 5 ? pos : o.start || 0 })); },
     // Andere ondertitelgrootte gekozen: dezelfde film op dezelfde plek opnieuw openen
     reload: pos => withVLC({ ...o, start: o.live ? 0 : pos }) };
-  try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live, series: !!o.series, nextTitle: o.nextTitle || '', castFirst: !!o.castFirst, run: o.run || 0 }); }
+  try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live, series: !!o.series, nextTitle: o.nextTitle || '', castFirst: !!o.castFirst, run: o.run || 0, duration: Number(o.duration) || 0 }); }
   catch { cur = null; connMark(false); toast('Afspelen lukt niet'); }
 }
 async function withApple(o) {
@@ -182,7 +182,7 @@ playVod = function (o) {
     const t0 = Date.now();
     let played = false;
     play({
-      url, title: o.title, sub: o.sub || '', start: o.start || 0, run,
+      url, title: o.title, sub: o.sub || '', start: o.start || 0, duration: o.duration || 0, run,
       series: o.kind === 'series', nextTitle: o.next ? (o.nextLabel || 'volgende') : '', castFirst,
       exit: (pos, dur, user) => {
         if (!user && pos < 0.5 && Date.now() - t0 < 45000 && !played) return tryIdx(i + 1);

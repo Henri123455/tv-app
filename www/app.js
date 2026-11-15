@@ -945,7 +945,9 @@ async function archiveChannelFor(it) {
   return list.find(c => ids.has(String(c.id))) || list.find(c => chanNorm(c.n) === chanNorm(it.n)) || null;
 }
 function dropSheet() { hideSheet(); const i = layers.indexOf(hideSheet); if (i >= 0) layers.splice(i, 1); }
-async function openChannel(it, ctx) {
+// Henri: een zender aantikken = meteen live kijken. Terugkijken alleen via het kopje "Terugkijken".
+function openChannel(it, ctx) { return playLive(it, ctx); }
+async function openChannelArchive(it, ctx) {
   const ch = await archiveChannelFor(it).catch(() => null);
   if (!ch) return playLive(it, ctx);
   const k = favKey('live', it.id);
@@ -1411,11 +1413,14 @@ const TOUCH = matchMedia('(hover: none) and (pointer: coarse)').matches;
 const IPHONE = /iPhone|iPod/.test(UA);
 if (IPHONE) { video.removeAttribute('playsinline'); video.removeAttribute('webkit-playsinline'); video.playsInline = false; }
 video.addEventListener('webkitendfullscreen', () => { if (!playerEl.hidden) closeTop(); });
+// Pc: ook meteen volledig scherm. In het venster werd het 1080p-beeld een stukje verkleind (titelbalk/taakbalk)
+// en daardoor zachter; schermvullend komt elke pixel 1-op-1 op een 1080p-scherm. Esc = terug naar het venster.
 function autoFullscreen() {
-  if (!TOUCH || IPHONE || document.fullscreenElement) return;
+  if (IPHONE || IS_APP || document.fullscreenElement) return;
   try {
     const p = (playerEl.requestFullscreen || playerEl.webkitRequestFullscreen)?.call(playerEl, { navigationUI: 'hide' });
-    Promise.resolve(p).then(() => screen.orientation?.lock?.('landscape')).catch(() => {});
+    if (TOUCH) Promise.resolve(p).then(() => screen.orientation?.lock?.('landscape')).catch(() => {});
+    else Promise.resolve(p).catch(() => {});
   } catch {}
 }
 function openPlayer() {
@@ -2260,22 +2265,19 @@ function expiryReminder() {
 // Dat laatste kan de app niet korter maken: de aanbieder ziet niet wanneer je een film stopt en wacht zelf af.
 const CONN_POLL = 4000, CONN_LINGER = 75000, CONN_FILM = 6 * 60e3, CONN_SETTLE = 12000;
 let connPlaying = false, connStart = 0, connFails = 0, connBusy = false;
-let connSelf = store.get('connSelf', null); // { t: laatst gezien, before: telling terwijl dit apparaat keek, film }
+// Eigen gestopte films/afleveringen: de aanbieder houdt die nog ~5 minuten als scherm vast. Die zijn van jou, niet van een ander apparaat.
+let connOwn = (store.get('connOwn', []) || []).filter(x => Date.now() - x < CONN_FILM);
 function connMark(on, film) {
   if (on === connPlaying) return;
   connPlaying = on; connStart = Date.now();
-  connSelf = on ? null : { t: Date.now(), before: connSelf?.before || 0, film: !!film };
-  store.set('connSelf', connSelf);
+  if (!on && film) { connOwn = [...connOwn.filter(x => Date.now() - x < CONN_FILM), Date.now()].slice(-3); store.set('connOwn', connOwn); }
   setTimeout(updateConns, on ? 0 : 800);
 }
-// Hoeveel andere apparaten kijken, en houdt de aanbieder nog een scherm vast van wat je hier net keek?
+// Hoeveel andere apparaten kijken: alles wat de aanbieder telt, min dit apparaat en wat het zelf nog vasthoudt
 function connOthers(active) {
-  if (connPlaying) return { n: Math.max(0, active - 1), held: 0 };
-  const s = connSelf; if (!s) return { n: active, held: 0 };
-  const age = Date.now() - s.t, limit = s.film ? CONN_FILM : CONN_LINGER;
-  if (active > 0 && (s.before ? age < limit && active >= s.before : age < CONN_SETTLE)) return { n: active - 1, held: s.film ? s.t + CONN_FILM : 0 };
-  connSelf = null; store.set('connSelf', null); // eigen verbinding is weg: vanaf nu telt alles
-  return { n: active, held: 0 };
+  connOwn = connOwn.filter(x => Date.now() - x < CONN_FILM);
+  const mine = (connPlaying ? 1 : 0) + connOwn.length;
+  return { n: Math.max(0, active - mine), held: connOwn.length ? connOwn[0] + CONN_FILM : 0 };
 }
 function showConns(active, max) {
   const pill = $('#connPill'); if (!pill) return;
@@ -2283,7 +2285,7 @@ function showConns(active, max) {
   pill.hidden = false;
   pill.classList.toggle('full', free <= 0);
   pill.classList.toggle('free', n === 0 && free > 0);
-  const who = n === 0 ? 'Niemand kijkt' : `${n} ${n === 1 ? 'scherm kijkt' : 'schermen kijken'}`;
+  const who = n === 0 ? (connPlaying ? 'Alleen jij kijkt' : 'Niemand kijkt') : `${n} ${n === 1 ? 'ander scherm kijkt' : 'andere schermen kijken'}`;
   $('span', pill).textContent = `${who} · ${free > 0 ? free + ' vrij' : 'vol'}`; // alleen hoeveel er nu vrij zijn
   pill.title = held ? 'Je laatste film houdt bij de aanbieder nog even een scherm vast (ongeveer 5 minuten na het stoppen). Dat bepaalt de aanbieder, niet de app.' : 'Schermen die nu kijken op je abonnement';
 }
@@ -2296,7 +2298,6 @@ async function updateConns() {
     if (!r.ok || c.active < 0 || !c.max) throw 0;
     connFails = 0;
     // Pas als de aanbieder ons heeft kunnen zien is dit een betrouwbare telling "terwijl ik keek"
-    if (connPlaying && Date.now() - connStart > CONN_SETTLE) { connSelf = { t: Date.now(), before: c.active }; store.set('connSelf', connSelf); }
     showConns(c.active, c.max);
     if (P.waitFree && c.active < c.max) window.retryLive();
   } catch { if (++connFails >= 3) $('#connPill').hidden = true; } finally { connBusy = false; }

@@ -70,8 +70,10 @@ public class VLCPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         let nextTitle = call.getString("nextTitle") ?? ""
         let castFirst = call.getBool("castFirst") ?? false
         let run = call.getInt("run") ?? 0
+        let duration = call.getDouble("duration") ?? 0
         DispatchQueue.main.async {
             let vc = VLCPlayerViewController(url: url, title: title, start: start, live: live)
+            vc.knownDuration = duration
             vc.series = series
             vc.nextTitle = nextTitle
             vc.castFirst = castFirst
@@ -216,7 +218,8 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         if cropped { player.videoCropGeometry = nil; cropped = false; crop = (0, 0, 0, 0) }
         spinner.startAnimating()
         let media = VLCMedia(url: newURL)
-        media.addOption(":network-caching=1500")
+        media.addOption(":network-caching=\(Self.liveCaching)")
+        Self.audioOptions(media)
         media.addOption(":adaptive-logic=highest")
         player.media = media
         player.play()
@@ -229,9 +232,26 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     private let castLabel = UILabel()
     private var casting = false
     private let airplay = AVRoutePickerView()
+    private let airplayButton = UIButton(type: .system)
+    // Live iets meer voorraad (minder haperen bij een drukke aanbieder), films starten sneller
+    static let liveCaching = 2500
+    // Geluid: Dolby (AC-3/E-AC-3) zonder "nachtstand"-compressie, zodat het voller en levendiger klinkt
+    static func audioOptions(_ m: VLCMedia) {
+        m.addOption(":avcodec-options={drc_scale=0}")
+        m.addOption(":no-a52-dynrng")
+    }
+    static let topIcon = UIImage.SymbolConfiguration(pointSize: 19, weight: .semibold)
+    @objc private func airplayTapped() {
+        // De knop van de systeemkiezer zelf aantikken (opent Apple's AirPlay-lijst)
+        func find(_ v: UIView) -> UIButton? { if let b = v as? UIButton { return b }; for s in v.subviews { if let b = find(s) { return b } }; return nil }
+        find(airplay)?.sendActions(for: .touchUpInside)
+        scheduleHide()
+    }
     private var lastProgress: Double = 0
     private var startChecked = false
-    private var length: Double { Double(player.media?.length.intValue ?? 0) / 1000 }
+    // Lengte: van VLC zelf; weet VLC het niet (sommige afspeellijsten), dan de lengte die de aanbieder opgeeft
+    var knownDuration: Double = 0
+    private var length: Double { let l = Double(player.media?.length.intValue ?? 0) / 1000; return l > 1 ? l : knownDuration }
 
     private let url: URL
     private let titleText: String
@@ -345,7 +365,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         spinner.color = .white
         spinner.hidesWhenStopped = true
 
-        subsButton.setImage(UIImage(systemName: "captions.bubble", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)), for: .normal)
+        subsButton.setImage(UIImage(systemName: "captions.bubble", withConfiguration: Self.topIcon), for: .normal)
         subsButton.tintColor = .white
         if #available(iOS 14.0, *) { subsButton.showsMenuAsPrimaryAction = true }
         subsButton.isHidden = true
@@ -353,15 +373,29 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         airplay.tintColor = .white
         airplay.activeTintColor = .systemBlue
         if #available(iOS 13.0, *) { airplay.prioritizesVideoDevices = true }
+        // Alle knoppen rechtsboven even groot: AirPlay als hetzelfde soort icoon, de systeemkiezer zit onzichtbaar erachter
+        airplay.alpha = 0.011
+        airplayButton.setImage(UIImage(systemName: "airplayvideo", withConfiguration: Self.topIcon), for: .normal)
+        airplayButton.tintColor = .white
+        airplayButton.addTarget(self, action: #selector(airplayTapped), for: .touchUpInside)
         NotificationCenter.default.addObserver(self, selector: #selector(routeChanged), name: AVAudioSession.routeChangeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(leftApp), name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(audioInterrupted(_:)), name: AVAudioSession.interruptionNotification, object: nil)
 
         // Chromecast-knop (verschijnt alleen als er een Chromecast/tv in je wifi is)
+        let castSlot = UIView()
+        castSlot.translatesAutoresizingMaskIntoConstraints = false
+        controls.addSubview(castSlot)
         let castButton = GCKUICastButton(frame: CGRect(x: 0, y: 0, width: 24, height: 24))
         castButton.tintColor = .white
         castButton.translatesAutoresizingMaskIntoConstraints = false
-        controls.addSubview(castButton)
+        castSlot.addSubview(castButton)
+        NSLayoutConstraint.activate([
+            castButton.centerXAnchor.constraint(equalTo: castSlot.centerXAnchor),
+            castButton.centerYAnchor.constraint(equalTo: castSlot.centerYAnchor),
+            castButton.widthAnchor.constraint(equalToConstant: 25),
+            castButton.heightAnchor.constraint(equalToConstant: 25),
+        ])
         castLabel.textColor = .white
         castLabel.font = .systemFont(ofSize: 17, weight: .semibold)
         castLabel.textAlignment = .center
@@ -375,10 +409,10 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             castLabel.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -40),
         ])
         GCKCastContext.sharedInstance().sessionManager.add(self)
-        let pipButton = symbolButton("pip.enter", size: 20, action: #selector(pipTapped))
+        let pipButton = symbolButton("pip.enter", size: 19, action: #selector(pipTapped))
         pipButton.isHidden = !AVPictureInPictureController.isPictureInPictureSupported()
         // Instellingen (tandwiel): slaaptimer en ondertitelgrootte
-        settingsButton.setImage(UIImage(systemName: "gearshape", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)), for: .normal)
+        settingsButton.setImage(UIImage(systemName: "gearshape", withConfiguration: Self.topIcon), for: .normal)
         settingsButton.tintColor = .white
         if #available(iOS 14.0, *) { settingsButton.showsMenuAsPrimaryAction = true }
         buildSettingsMenu()
@@ -391,7 +425,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
                 view.addGestureRecognizer(sw)
             }
         }
-        for v in [close, back, fwd, playButton, title, timeLabel, slider, subsButton, airplay, pipButton, settingsButton] as [UIView] {
+        for v in [close, back, fwd, playButton, title, timeLabel, slider, subsButton, airplay, airplayButton, pipButton, settingsButton] as [UIView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             controls.addSubview(v)
         }
@@ -426,24 +460,28 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             close.heightAnchor.constraint(equalToConstant: 44),
             title.leadingAnchor.constraint(equalTo: close.trailingAnchor, constant: 12),
             title.centerYAnchor.constraint(equalTo: close.centerYAnchor),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: castButton.leadingAnchor, constant: -16),
-            castButton.trailingAnchor.constraint(equalTo: pipButton.leadingAnchor, constant: -8),
-            castButton.centerYAnchor.constraint(equalTo: close.centerYAnchor),
-            castButton.widthAnchor.constraint(equalToConstant: 44),
-            castButton.heightAnchor.constraint(equalToConstant: 44),
-            pipButton.trailingAnchor.constraint(equalTo: airplay.leadingAnchor, constant: -8),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: castSlot.leadingAnchor, constant: -16),
+            castSlot.trailingAnchor.constraint(equalTo: pipButton.leadingAnchor, constant: -4),
+            castSlot.centerYAnchor.constraint(equalTo: close.centerYAnchor),
+            castSlot.widthAnchor.constraint(equalToConstant: 44),
+            castSlot.heightAnchor.constraint(equalToConstant: 44),
+            pipButton.trailingAnchor.constraint(equalTo: airplay.leadingAnchor, constant: -4),
             pipButton.centerYAnchor.constraint(equalTo: close.centerYAnchor),
             pipButton.widthAnchor.constraint(equalToConstant: 44),
             pipButton.heightAnchor.constraint(equalToConstant: 44),
-            airplay.trailingAnchor.constraint(equalTo: subsButton.leadingAnchor, constant: -8),
+            airplay.trailingAnchor.constraint(equalTo: subsButton.leadingAnchor, constant: -4),
             airplay.centerYAnchor.constraint(equalTo: close.centerYAnchor),
             airplay.widthAnchor.constraint(equalToConstant: 44),
             airplay.heightAnchor.constraint(equalToConstant: 44),
+            airplayButton.centerXAnchor.constraint(equalTo: airplay.centerXAnchor),
+            airplayButton.centerYAnchor.constraint(equalTo: airplay.centerYAnchor),
+            airplayButton.widthAnchor.constraint(equalToConstant: 44),
+            airplayButton.heightAnchor.constraint(equalToConstant: 44),
             settingsButton.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -16),
             settingsButton.centerYAnchor.constraint(equalTo: close.centerYAnchor),
             settingsButton.widthAnchor.constraint(equalToConstant: 44),
             settingsButton.heightAnchor.constraint(equalToConstant: 44),
-            subsButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -8),
+            subsButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -4),
             subsButton.centerYAnchor.constraint(equalTo: close.centerYAnchor),
             subsButton.widthAnchor.constraint(equalToConstant: 44),
             subsButton.heightAnchor.constraint(equalToConstant: 44),
@@ -494,7 +532,8 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         controls.addGestureRecognizer(tap2)
 
         let media = VLCMedia(url: url)
-        media.addOption(":network-caching=1500")
+        media.addOption(":network-caching=\(live ? Self.liveCaching : 2000)")
+        Self.audioOptions(media)
         // Bij afspeellijsten met meerdere kwaliteiten (o.a. "HQ"-films): altijd de hoogste, het originele beeld
         media.addOption(":adaptive-logic=highest")
         media.addOption(":adaptive-maxwidth=3840")
@@ -647,7 +686,27 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         playButton.setImage(UIImage(systemName: playing ? "pause.fill" : "play.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 44, weight: .semibold)), for: .normal)
     }
 
-    private var seconds: Double { Double(player.time.intValue) / 1000 }
+    // Doorspoelen: het doel onthouden tot VLC daar echt is. Zo springt de balk niet even terug, telt een tweede
+    // tik op +10 vanaf het doel (niet vanaf de oude plek) en wordt bij sluiten de juiste plek bewaard.
+    private var seekTarget: Double?
+    private var seekAt = Date.distantPast
+    private var rawSeconds: Double { Double(player.time.intValue) / 1000 }
+    private var seconds: Double { seekTarget ?? rawSeconds }
+    private func seek(to target: Double) {
+        let len = length
+        let t = max(0, len > 0 ? min(target, len - 3) : target)
+        seekTarget = t; seekAt = Date()
+        player.time = VLCTime(int: Int32(t * 1000))
+        spinner.startAnimating()
+        showTime()
+        onProgress?(t, len); lastProgress = t
+    }
+    private func showTime() {
+        guard !live else { return }
+        let len = length, t = seconds
+        if !seeking && len > 0 { slider.value = Float(min(1, t / len)) }
+        timeLabel.text = len > 0 ? format(t) + " / " + format(len) : format(t)
+    }
 
     private func format(_ s: Double) -> String {
         let t = max(0, Int(s)), h = t / 3600, m = (t / 60) % 60, x = t % 60
@@ -669,21 +728,41 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     }
 
     @objc private func togglePlay() {
-        if player.isPlaying { player.pause(); setPlayIcon(playing: false) } else { resumePlayback() }
+        if player.isPlaying { pausePlayback() } else { resumePlayback() }
         scheduleHide()
     }
     // Verder na pauze (of na een telefoontje/Siri): VLC liet het geluid soms pas na een tijdje terugkomen.
     // Geluid weer aanzetten en het geluidsspoor opnieuw kiezen = de geluidsdecoder start meteen opnieuw.
+    // Verder na pauze (of na een telefoontje/Siri). VLC liet het geluid na pauze soms pas na seconden terugkomen,
+    // omdat de geluidsklok opnieuw moest gelijklopen. Daarom niet "gewoon doorspelen" maar opnieuw starten op precies
+    // dezelfde plek: beeld en geluid beginnen dan samen. Live: na een pauze gewoon weer live (verse verbinding).
+    private var pausedAt: Date?
+    private func pausePlayback() {
+        player.pause(); setPlayIcon(playing: false); pausedAt = Date()
+        if !live && everPlayed { onProgress?(seconds, length) }
+    }
     private func resumePlayback() {
         try? AVAudioSession.sharedInstance().setActive(true)
-        player.play()
         setPlayIcon(playing: true)
-        for t in [0.3, 1.2] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
-                guard let self = self, !self.finished, !self.casting, self.player.isPlaying else { return }
-                let a = self.player.currentAudioTrackIndex
-                if a >= 0 { self.player.currentAudioTrackIndex = -1; self.player.currentAudioTrackIndex = a }
-            }
+        let paused = pausedAt.map { Date().timeIntervalSince($0) } ?? 0
+        pausedAt = nil
+        if live, paused > 1.5, let u = player.media?.url {
+            spinner.startAnimating()
+            let media = VLCMedia(url: u)
+            media.addOption(":network-caching=\(Self.liveCaching)")
+            media.addOption(":adaptive-logic=highest")
+            Self.audioOptions(media)
+            player.media = media
+            player.play()
+            return
+        }
+        let t = player.time
+        player.play()
+        guard !live, paused > 0.3, t.intValue > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self = self, !self.finished, !self.casting else { return }
+            // Alleen als er intussen niet al doorgespoeld is
+            if abs(Int(self.player.time.intValue) - Int(t.intValue)) < 1500 { self.player.time = t }
         }
     }
     private var wasPlayingBeforeInterruption = false
@@ -694,21 +773,26 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             guard let self = self, !self.finished, !self.casting else { return }
             if type == .began {
                 self.wasPlayingBeforeInterruption = self.player.isPlaying || self.player.state == .buffering
-                if self.wasPlayingBeforeInterruption { self.player.pause(); self.setPlayIcon(playing: false) }
+                if self.wasPlayingBeforeInterruption { self.pausePlayback() }
             } else if self.wasPlayingBeforeInterruption {
                 self.wasPlayingBeforeInterruption = false
                 self.resumePlayback()
             }
         }
     }
-    @objc private func back10() { player.jumpBackward(10); scheduleHide() }
-    @objc private func forward10() { player.jumpForward(10); scheduleHide() }
+    @objc private func back10() { seek(to: seconds - 10); scheduleHide() }
+    @objc private func forward10() { seek(to: seconds + 10); scheduleHide() }
     @objc private func sliderStart() { seeking = true; hideTimer?.invalidate() }
     @objc private func sliderMoved() {
-        let len = Double(player.media?.length.intValue ?? 0) / 1000
+        let len = length
         if len > 0 { timeLabel.text = format(Double(slider.value) * len) + " / " + format(len) }
     }
-    @objc private func sliderEnd() { player.position = slider.value; seeking = false; scheduleHide() }
+    @objc private func sliderEnd() {
+        seeking = false
+        let len = length
+        if len > 0 { seek(to: Double(slider.value) * len) } else { player.position = slider.value }
+        scheduleHide()
+    }
     @objc private func closeTapped() { finish(ended: false, user: true) }
     @objc private func pipTapped() {
         guard !finished else { return }
@@ -732,7 +816,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             then()
         }
     }
-    @objc private func skipIntro() { introSkipped = true; introButton.isHidden = true; player.jumpForward(80) }
+    @objc private func skipIntro() { introSkipped = true; introButton.isHidden = true; seek(to: seconds + 80) }
     // Meteen door naar de volgende aflevering (de app start die na "afgelopen")
     @objc private func playNext() { nextButton.isHidden = true; finish(ended: true) }
 
@@ -748,6 +832,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
 
     // App weggeveegd: niet stiekem doorspelen, anders blijft er een scherm bezet (Chromecast speelt gewoon door op de tv)
     @objc private func leftApp() {
+        if !live && everPlayed { onProgress?(seconds, length) }
         guard !casting else { return }
         finish(ended: false, user: true)
     }
@@ -938,18 +1023,20 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     func mediaPlayerTimeChanged(_ aNotification: Notification) {
         if !everPlayed || videoView.frame == view.bounds { fitVideo() }
         // Verder kijken: sommige streams negeren de starttijd, dan zelf naar die plek springen
-        if !startChecked && seconds > 0.5 {
+        if let tgt = seekTarget {
+            // Pas loslaten als VLC bij het doel is (of na 8 s, dan is er iets anders aan de hand)
+            if abs(rawSeconds - tgt) < 2.5 || Date().timeIntervalSince(seekAt) > 8 { seekTarget = nil } else { return }
+        }
+        if !startChecked && rawSeconds > 0.5 {
             startChecked = true
-            if start > 30 && seconds < start - 10 { player.time = VLCTime(int: Int32(start * 1000)) }
+            if start > 30 && rawSeconds < start - 10 { seek(to: start); return }
         }
         everPlayed = true
         spinner.stopAnimating()
         enforceSubtitles()
-        if abs(seconds - lastProgress) >= 10 { lastProgress = seconds; onProgress?(seconds, length) }
+        if abs(seconds - lastProgress) >= 5 { lastProgress = seconds; onProgress?(seconds, length) }
         if !live { updateSeriesButtons() }
         if seeking || live { return }
-        slider.value = player.position
-        let len = Double(player.media?.length.intValue ?? 0) / 1000
-        timeLabel.text = len > 0 ? format(seconds) + " / " + format(len) : format(seconds)
+        showTime()
     }
 }
