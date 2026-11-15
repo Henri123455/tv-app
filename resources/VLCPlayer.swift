@@ -216,7 +216,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         if cropped { player.videoCropGeometry = nil; cropped = false; crop = (0, 0, 0, 0) }
         spinner.startAnimating()
         let media = VLCMedia(url: newURL)
-        media.addOption(":network-caching=3000")
+        media.addOption(":network-caching=1500")
         media.addOption(":adaptive-logic=highest")
         player.media = media
         player.play()
@@ -355,6 +355,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         if #available(iOS 13.0, *) { airplay.prioritizesVideoDevices = true }
         NotificationCenter.default.addObserver(self, selector: #selector(routeChanged), name: AVAudioSession.routeChangeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(leftApp), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(audioInterrupted(_:)), name: AVAudioSession.interruptionNotification, object: nil)
 
         // Chromecast-knop (verschijnt alleen als er een Chromecast/tv in je wifi is)
         let castButton = GCKUICastButton(frame: CGRect(x: 0, y: 0, width: 24, height: 24))
@@ -493,7 +494,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         controls.addGestureRecognizer(tap2)
 
         let media = VLCMedia(url: url)
-        media.addOption(":network-caching=3000")
+        media.addOption(":network-caching=1500")
         // Bij afspeellijsten met meerdere kwaliteiten (o.a. "HQ"-films): altijd de hoogste, het originele beeld
         media.addOption(":adaptive-logic=highest")
         media.addOption(":adaptive-maxwidth=3840")
@@ -668,8 +669,37 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     }
 
     @objc private func togglePlay() {
-        if player.isPlaying { player.pause(); setPlayIcon(playing: false) } else { player.play(); setPlayIcon(playing: true) }
+        if player.isPlaying { player.pause(); setPlayIcon(playing: false) } else { resumePlayback() }
         scheduleHide()
+    }
+    // Verder na pauze (of na een telefoontje/Siri): VLC liet het geluid soms pas na een tijdje terugkomen.
+    // Geluid weer aanzetten en het geluidsspoor opnieuw kiezen = de geluidsdecoder start meteen opnieuw.
+    private func resumePlayback() {
+        try? AVAudioSession.sharedInstance().setActive(true)
+        player.play()
+        setPlayIcon(playing: true)
+        for t in [0.3, 1.2] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+                guard let self = self, !self.finished, !self.casting, self.player.isPlaying else { return }
+                let a = self.player.currentAudioTrackIndex
+                if a >= 0 { self.player.currentAudioTrackIndex = -1; self.player.currentAudioTrackIndex = a }
+            }
+        }
+    }
+    private var wasPlayingBeforeInterruption = false
+    @objc private func audioInterrupted(_ n: Notification) {
+        guard let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, !self.finished, !self.casting else { return }
+            if type == .began {
+                self.wasPlayingBeforeInterruption = self.player.isPlaying || self.player.state == .buffering
+                if self.wasPlayingBeforeInterruption { self.player.pause(); self.setPlayIcon(playing: false) }
+            } else if self.wasPlayingBeforeInterruption {
+                self.wasPlayingBeforeInterruption = false
+                self.resumePlayback()
+            }
+        }
     }
     @objc private func back10() { player.jumpBackward(10); scheduleHide() }
     @objc private func forward10() { player.jumpForward(10); scheduleHide() }
@@ -768,7 +798,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         guard casting else { return }
         casting = false
         castLabel.isHidden = true
-        player.play(); setPlayIcon(playing: true)
+        resumePlayback()
     }
 
     // Stond AirPlay al aan voordat je op afspelen tikte? Dan meteen via Apple's speler naar de tv
