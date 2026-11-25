@@ -106,9 +106,10 @@ async function route(url, init) {
     if (method === 'POST') { const r = await addAccount(body()); account = null; return r; }
     return accountsView();
   }
-  if ((m = p.match(/^\/api\/accounts\/(\d+)(\/primary)?$/)) && cfg) {
+  if ((m = p.match(/^\/api\/accounts\/(\d+)(\/primary|\/name)?$/)) && cfg) {
     const i = Number(m[1]);
-    if (m[2] && method === 'POST') { const r = setPrimary(i); account = null; return r; }
+    if (m[2] === '/name' && method === 'POST') return renameAccount(i, body().name);
+    if (m[2] === '/primary' && method === 'POST') { const r = setPrimary(i); account = null; return r; }
     if (!m[2] && method === 'DELETE') { const r = removeAccount(i); account = null; return r; }
   }
   if (p === '/api/login' && method === 'POST') {

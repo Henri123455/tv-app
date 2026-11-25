@@ -2268,6 +2268,8 @@ $('#accountBtn').onclick = async () => {
       <p class="muted small">Met twee accounts werkt de app als één: hij kijkt op je primaire account, en kijkt daar al iemand, dan schakelt hij vanzelf naar het andere. Mijn lijst en verder kijken horen bij je profiel en gelden dus voor allebei.</p>
       <button class="btn glass" id="accAddBtn">Account toevoegen</button>
       <form class="acc-add" id="accAdd" hidden autocomplete="off">
+        <input name="paste" class="paste-field" placeholder="Plak hier je link of inloggegevens (vult alles in)" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input name="name" placeholder="Naam (bijv. Account 2), mag leeg" maxlength="30">
         <input name="server" placeholder="Server (leeg = dezelfde)" autocapitalize="off" spellcheck="false">
         <input name="username" placeholder="Gebruikersnaam" required autocapitalize="off" spellcheck="false">
         <input name="password" placeholder="Wachtwoord" required type="password">
@@ -2293,13 +2295,15 @@ $('#accountBtn').onclick = async () => {
   };
   $('#switchProfile').onclick = () => { closeTop(); setTimeout(showWho, 60); };
   renderAccounts();
-  $('#accAddBtn').onclick = () => { const f = $('#accAdd'); f.hidden = !f.hidden; if (!f.hidden) f.username.focus(); };
+  $('#accAddBtn').onclick = () => { const f = $('#accAdd'); f.hidden = !f.hidden; if (!f.hidden) f.paste.focus(); };
+  pasteFill($('#accAdd'));
   $('#accAdd').onsubmit = async e => {
     e.preventDefault();
     const f = e.target, b = $('button', f), msg = $('#accAddMsg');
     b.disabled = true; msg.textContent = 'Controleren…';
     try {
-      const r = await fetch('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(f))) });
+      const { paste, ...data } = Object.fromEntries(new FormData(f));
+      const r = await fetch('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error || 'Toevoegen mislukt');
       f.reset(); f.hidden = true; msg.textContent = '';
@@ -2312,6 +2316,50 @@ $('#accountBtn').onclick = async () => {
   }
 };
 
+// ---- Inloggegevens plakken: de link of het berichtje van je aanbieder in één keer invullen ----
+// Snapt o.a. "http://server:8080/get.php?username=X&password=Y", "http://server/live/X/Y/123.ts"
+// en tekst als "Gebruikersnaam: X  Wachtwoord: Y  Server: http://...".
+function parseCreds(text) {
+  const t = String(text || '').trim(), out = {};
+  const um = t.match(/https?:\/\/[^\s"'<>]+/i);
+  if (um) {
+    try {
+      const u = new URL(um[0]), q = u.searchParams;
+      if (q.get('username')) { out.username = q.get('username'); if (q.get('password')) out.password = q.get('password'); }
+      else {
+        const seg = u.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+        const i = /^(live|movie|series|timeshift)$/.test(seg[0] || '') ? 1 : 0;
+        if (seg.length >= i + 2 && !/\.(php|m3u8?)$/i.test(seg[i]) && !/\.(php|m3u8?)$/i.test(seg[i + 1])) { out.username = seg[i]; out.password = seg[i + 1]; }
+      }
+      out.server = u.protocol + '//' + u.host;
+    } catch {}
+  }
+  const grab = re => (t.match(re) || [])[1]?.trim();
+  out.username ||= grab(/(?:user\s*name|username|user|gebruikersnaam|gebruiker|login)\s*[:=]\s*([^\s,;|]+)/i);
+  out.password ||= grab(/(?:pass\s*word|password|pass|wachtwoord|ww|pw)\s*[:=]\s*([^\s,;|]+)/i);
+  if (!out.server) { const s = grab(/(?:server|host|url|portal|dns)\s*[:=]\s*([^\s,;|]+)/i); if (s) out.server = /^https?:/i.test(s) ? s : 'http://' + s; }
+  return out;
+}
+function pasteFill(form) {
+  if (!form || form.dataset.paste) return;
+  form.dataset.paste = '1';
+  const fill = text => {
+    const c = parseCreds(text);
+    const n = ['server', 'username', 'password'].filter(k => c[k] && form[k]).length;
+    if (n < 2) return false;
+    for (const k of ['server', 'username', 'password']) if (c[k] && form[k]) form[k].value = c[k];
+    toast('Ingevuld, controleer het even');
+    return true;
+  };
+  form.paste?.addEventListener('input', () => { if (fill(form.paste.value)) form.paste.value = ''; });
+  // Ook als je alles in een van de gewone vakjes plakt
+  for (const k of ['server', 'username', 'password']) form[k]?.addEventListener('paste', e => {
+    const text = e.clipboardData?.getData('text') || '';
+    if (/\s|username=|\/live\//i.test(text.trim()) && fill(text)) e.preventDefault();
+  });
+}
+pasteFill($('#loginForm'));
+
 // Lijst met accounts: status, geldig tot, wie er kijkt; primair maken en weghalen
 async function renderAccounts() {
   const box = $('#accList'); if (!box) return;
@@ -2320,11 +2368,19 @@ async function renderAccounts() {
   if (!$('#accList') || !Array.isArray(list)) return;
   const date = s => s ? new Date(s * 1000).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
   box.innerHTML = list.map(a => `<div class="acc-row ${a.valid ? '' : 'bad'}">
-    <div class="acc-main"><div><b>${esc(a.username)}</b>${a.primary ? '<span class="acc-tag">Primair</span>' : ''}</div>
+    <div class="acc-main"><div><b>${esc(a.name || a.username)}</b>${a.primary ? '<span class="acc-tag">Primair</span>' : ''}</div>
+      ${a.name ? `<small>${esc(a.username)}</small>` : ''}
       <small>${a.valid ? `Geldig tot ${esc(date(a.exp))} · ${a.active ? `${a.active} van ${a.max} kijkt` : `${a.max} schermen, niemand kijkt`}` : esc(a.status === 'Expired' ? 'Verlopen op ' + date(a.exp) : a.status || 'Werkt niet')}</small></div>
+    <button class="link" data-acc-name="${a.i}">Naam</button>
     ${list.length > 1 && !a.primary ? `<button class="link" data-acc-primary="${a.i}">Maak primair</button>` : ''}
     ${list.length > 1 ? `<button class="link danger" data-acc-del="${a.i}">Weghalen</button>` : ''}
   </div>`).join('');
+  $$('[data-acc-name]', box).forEach(b => b.onclick = async () => {
+    const a = list.find(x => String(x.i) === b.dataset.accName);
+    const name = prompt('Naam voor dit account (leeg = gebruikersnaam):', a?.name || '');
+    if (name == null) return;
+    try { await api(`/api/accounts/${b.dataset.accName}/name`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); renderAccounts(); } catch (e) { toast(e.message); }
+  });
   $$('[data-acc-primary]', box).forEach(b => b.onclick = async () => {
     try { await api(`/api/accounts/${b.dataset.accPrimary}/primary`, { method: 'POST' }); toast('Primair account gewijzigd'); renderAccounts(); } catch (e) { toast(e.message); }
   });
@@ -2358,6 +2414,7 @@ $('#loginForm').onsubmit = async e => {
   e.preventDefault();
   const f = new FormData(e.target);
   $('#loginError').textContent = '';
+  f.delete('paste');
   const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(f)) });
   const j = await r.json().catch(() => ({}));
   if (j.ok) { S.session = await (await fetch('/api/session')).json(); showWho(); }

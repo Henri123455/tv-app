@@ -313,6 +313,8 @@ code { background: rgba(255,255,255,.1); padding: 2px 7px; border-radius: 6px; u
 .link.danger { color: var(--red); }
 .acc-add { display: grid; gap: 10px; margin-top: 12px; }
 .acc-add input { width: 100%; box-sizing: border-box; }
+.paste-field { width: 100%; box-sizing: border-box; border-style: dashed !important; }
+.login-card .paste-field { margin-bottom: 10px; }
 .acc-add-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 .toast { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%); z-index: 200; background: rgba(44,44,48,.95); backdrop-filter: blur(20px); padding: 12px 20px; border-radius: 14px; font-weight: 600; box-shadow: 0 10px 40px rgba(0,0,0,.5); animation: pop .25s var(--ease); max-width: calc(100vw - 32px); }

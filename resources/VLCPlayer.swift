@@ -292,6 +292,9 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     private let playButton = UIButton(type: .system)
     private let slider = UISlider()
     private let scrubLabel = UILabel() // tijd boven je vinger tijdens het schuiven
+    private let scrubImage = UIImageView() // voorbeeldbeeldje erboven
+    private var thumbs: ScrubThumbs?
+    private var thumbWant = -1
     private let timeLabel = UILabel()
     private let spinner = UIActivityIndicatorView(style: .large)
     private var hideTimer: Timer?
@@ -808,10 +811,37 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         let w: CGFloat = 96, h: CGFloat = 34
         scrubLabel.frame = CGRect(x: min(max(c.x - w / 2, 8), controls.bounds.width - w - 8), y: c.y - h - 10, width: w, height: h)
         scrubLabel.isHidden = false
+        // Voorbeeldbeeldje erboven (zoals Netflix): per 10 seconden, het laatst gevraagde wint
+        if thumbs == nil, !live { setupThumbs() }
+        guard let th = thumbs, th.usable else { scrubImage.isHidden = true; return }
+        let iw: CGFloat = 208, ih: CGFloat = 117
+        scrubImage.frame = CGRect(x: min(max(c.x - iw / 2, 8), controls.bounds.width - iw - 8), y: scrubLabel.frame.minY - ih - 6, width: iw, height: ih)
+        let t = Int((Double(slider.value) * len / 10).rounded()) * 10
+        thumbWant = t
+        if let img = th.cached(t) { scrubImage.image = img; scrubImage.alpha = 1 } else { scrubImage.alpha = scrubImage.image == nil ? 0 : 0.55 }
+        scrubImage.isHidden = false
+        th.request(t, length: len)
+    }
+    private func setupThumbs() {
+        let th = ScrubThumbs(url: player.media?.url ?? url)
+        th.onImage = { [weak self] t, img in
+            guard let self = self, self.seeking, t == self.thumbWant else { return }
+            self.scrubImage.image = img; self.scrubImage.alpha = 1
+        }
+        thumbs = th
+        scrubImage.contentMode = .scaleAspectFill
+        scrubImage.clipsToBounds = true
+        scrubImage.layer.cornerRadius = 8
+        scrubImage.layer.borderWidth = 2
+        scrubImage.layer.borderColor = UIColor.white.withAlphaComponent(0.85).cgColor
+        scrubImage.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        scrubImage.isHidden = true
+        controls.addSubview(scrubImage)
     }
     @objc private func sliderEnd() {
         seeking = false
         scrubLabel.isHidden = true
+        scrubImage.isHidden = true
         let len = length
         if len > 0 { seek(to: Double(slider.value) * len) } else { player.position = slider.value }
         scheduleHide()
@@ -923,6 +953,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         finished = true
         hideTimer?.invalidate()
         sleepTimer?.invalidate()
+        thumbs?.stop(); thumbs = nil
         let t = everPlayed ? seconds : 0
         let len = length
         player.stop()
@@ -1084,4 +1115,89 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         if seeking || live { return }
         showTime()
     }
+}
+
+// ---- Voorbeeldbeeldjes bij het doorspoelen (zoals Netflix) ----
+// .mp4: Apple's AVAssetImageGenerator (leest alleen het dichtstbijzijnde sleutelbeeld: snel en weinig data).
+// Andere bestanden (.mkv e.d.): VLC's eigen beeldjesmaker. Hetzelfde (al doorverwezen) adres als de film,
+// één tegelijk, het laatst gevraagde wint, per 10 seconden onthouden. Lukt het twee keer niet (bijv. alle
+// schermen bezet), dan alleen de tijd tonen; de film zelf merkt er niets van.
+final class ScrubThumbs: NSObject, VLCMediaThumbnailerDelegate {
+    private let url: URL
+    private var generator: AVAssetImageGenerator?
+    private var cache: [Int: UIImage] = [:]
+    private var busy = false
+    private var want: Int?
+    private var fails = 0
+    private var vlcThumb: VLCMediaThumbnailer?
+    private var vlcFor = 0
+    private var length: Double = 0
+    var onImage: ((Int, UIImage) -> Void)?
+
+    init(url: URL) {
+        self.url = url
+        super.init()
+        if ["mp4", "m4v", "mov"].contains(url.pathExtension.lowercased()) {
+            let g = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            g.appliesPreferredTrackTransform = true
+            g.maximumSize = CGSize(width: 416, height: 234)
+            g.requestedTimeToleranceBefore = CMTime(seconds: 8, preferredTimescale: 600)
+            g.requestedTimeToleranceAfter = CMTime(seconds: 8, preferredTimescale: 600)
+            generator = g
+        }
+    }
+    var usable: Bool { fails < 2 }
+    func cached(_ t: Int) -> UIImage? { cache[t] }
+    func request(_ t: Int, length: Double) {
+        self.length = length
+        if let img = cache[t] { onImage?(t, img); return }
+        want = t
+        next()
+    }
+    private func next() {
+        guard !busy, usable, let t = want else { return }
+        if let img = cache[t] { want = nil; onImage?(t, img); return }
+        busy = true
+        if let g = generator {
+            g.generateCGImagesAsynchronously(forTimes: [NSValue(time: CMTime(seconds: Double(t), preferredTimescale: 600))]) { [weak self] _, cg, _, _, _ in
+                let img = cg.map { UIImage(cgImage: $0) }
+                DispatchQueue.main.async { self?.finish(t, img) }
+            }
+        } else {
+            guard length > 0 else { busy = false; return }
+            let th = VLCMediaThumbnailer(media: VLCMedia(url: url), andDelegate: self)
+            th.thumbnailWidth = 416
+            th.thumbnailHeight = 234
+            th.snapshotPosition = Float(min(0.99, max(0.0, Double(t) / length)))
+            vlcThumb = th; vlcFor = t
+            th.fetchThumbnail()
+        }
+    }
+    private func finish(_ t: Int, _ img: UIImage?) {
+        busy = false
+        if let img = img {
+            fails = 0
+            if cache.count > 300 { cache.removeAll() }
+            cache[t] = img
+            onImage?(t, img)
+        } else { fails += 1 }
+        if want == t { want = nil }
+        next()
+    }
+    func mediaThumbnailer(_ mediaThumbnailer: VLCMediaThumbnailer, didFinishThumbnail thumbnail: CGImage) {
+        let img = UIImage(cgImage: thumbnail)
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.vlcThumb = nil
+            self.finish(self.vlcFor, img)
+        }
+    }
+    func mediaThumbnailerDidTimeOut(_ mediaThumbnailer: VLCMediaThumbnailer) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.vlcThumb = nil
+            self.finish(self.vlcFor, nil)
+        }
+    }
+    func stop() { generator?.cancelAllCGImageGeneration(); vlcThumb = nil; want = nil; onImage = nil }
 }

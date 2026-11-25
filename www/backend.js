@@ -890,7 +890,7 @@ async function accountsView() {
   const infos = await Promise.all(l.map(a => accInfo(a)));
   return l.map((a, i) => {
     const u = infos[i] || {};
-    return { i, username: a.username, host: hostOf(a.server), primary: i === p, valid: accValid(infos[i]), status: infos[i] ? (u.status || '') : 'Niet bereikbaar',
+    return { i, name: a.name || '', username: a.username, host: hostOf(a.server), primary: i === p, valid: accValid(infos[i]), status: infos[i] ? (u.status || '') : 'Niet bereikbaar',
       exp: Number(u.exp_date) || 0, active: Number(u.active_cons) || 0, max: Number(u.max_connections) || 0 };
   });
 }
@@ -902,6 +902,8 @@ async function connTotals() {
 }
 async function addAccount(b) {
   const c = { server: String(b.server || '').trim() || catalogAcc().server, username: String(b.username || '').trim(), password: String(b.password || '').trim() };
+  const name = String(b.name || '').trim().slice(0, 30);
+  if (name) c.name = name;
   if (!/^https?:\/\//.test(c.server)) c.server = 'http://' + c.server;
   if (!c.username || !c.password) throw accErr(400, 'Vul een gebruikersnaam en wachtwoord in');
   if (accList().some(a => a.username === c.username && hostOf(a.server) === hostOf(c.server))) throw accErr(400, 'Dit account staat er al in');
@@ -925,6 +927,14 @@ function setPrimary(i) {
   if (!(i >= 0 && i < accList().length)) throw accErr(400, 'Onbekend account');
   cfg.accounts = accList(); cfg.primary = i; accSticky.clear();
   saveCfg(); refreshCatalog().catch(() => {});
+  return { ok: true };
+}
+// Eigen naam voor een account (bijv. "Account van Henri"), alleen voor jezelf in de app
+function renameAccount(i, name) {
+  const l = accList();
+  if (!(i >= 0 && i < l.length)) throw accErr(400, 'Onbekend account');
+  cfg.accounts = l.map((a, j) => j === i ? { ...a, name: String(name || '').trim().slice(0, 30) } : a);
+  saveCfg();
   return { ok: true };
 }
 function removeAccount(i) {
@@ -1048,9 +1058,10 @@ async function route(url, init) {
     if (method === 'POST') { const r = await addAccount(body()); account = null; return r; }
     return accountsView();
   }
-  if ((m = p.match(/^\/api\/accounts\/(\d+)(\/primary)?$/)) && cfg) {
+  if ((m = p.match(/^\/api\/accounts\/(\d+)(\/primary|\/name)?$/)) && cfg) {
     const i = Number(m[1]);
-    if (m[2] && method === 'POST') { const r = setPrimary(i); account = null; return r; }
+    if (m[2] === '/name' && method === 'POST') return renameAccount(i, body().name);
+    if (m[2] === '/primary' && method === 'POST') { const r = setPrimary(i); account = null; return r; }
     if (!m[2] && method === 'DELETE') { const r = removeAccount(i); account = null; return r; }
   }
   if (p === '/api/login' && method === 'POST') {
