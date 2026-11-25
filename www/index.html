@@ -72,6 +72,7 @@
 <div id="player" class="player" hidden>
   <video id="video" playsinline webkit-playsinline x-webkit-airplay="allow" preload="auto"></video>
   <div class="p-spinner" id="pSpinner"></div>
+  <div class="p-flash" id="pFlash" aria-hidden="true"></div>
   <div class="p-msg" id="pMsg" hidden></div>
 
   <div class="p-ui" id="pUi">
@@ -92,16 +93,21 @@
     </div>
 
     <div class="p-bottom">
+      <div class="p-seek" id="pSeekWrap">
+        <div class="p-bar" id="pBar">
+          <input type="range" id="pSeek" min="0" max="1000" value="0" step="1" aria-label="Doorspoelen">
+          <div class="p-preview" id="pPreview" hidden><div class="pv-img"><img alt=""></div><span class="pv-time"></span></div>
+        </div>
+        <span class="p-times"><span id="pCur">0:00</span> / <span id="pDur">0:00</span></span>
+      </div>
       <div class="p-controls">
         <button class="round" id="pPrev" title="Vorige zender (â†‘)"><svg viewBox="0 0 24 24"><path d="M6 5v14M19 5l-9 7 9 7z"/></svg></button>
         <button class="round big" id="pPlay" title="Afspelen/pauze (spatie)"><svg viewBox="0 0 24 24" class="i-pause"><path d="M8 5v14M16 5v14"/></svg><svg viewBox="0 0 24 24" class="i-play"><path d="M7 4l13 8-13 8z" fill="currentColor"/></svg></button>
+        <button class="round skip" id="pRew" title="10 seconden terug (pijl links)"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="800" fill="currentColor" stroke="none">10</text></svg></button>
+        <button class="round skip" id="pFwd" title="10 seconden vooruit (pijl rechts)"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4h-4"/><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="800" fill="currentColor" stroke="none">10</text></svg></button>
         <button class="round" id="pNext" title="Volgende zender (â†“)"><svg viewBox="0 0 24 24"><path d="M18 5v14M5 5l9 7-9 7z"/></svg></button>
         <span class="live-dot" id="pLive">LIVE</span>
-        <div class="p-seek" id="pSeekWrap">
-          <span id="pCur">0:00</span>
-          <input type="range" id="pSeek" min="0" max="1000" value="0">
-          <span id="pDur">0:00</span>
-        </div>
+        <div class="p-spacer"></div>
         <button class="round" id="pList" title="Zenders"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
       </div>
     </div>

@@ -214,7 +214,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         guard !finished else { return }
         titleLabel.text = title
         showHint(title)
-        everPlayed = false; startChecked = false; subsApplied = false; lastBars = nil
+        everPlayed = false; startChecked = false; subsApplied = false; lastBars = nil; audioChecked = false
         if cropped { player.videoCropGeometry = nil; cropped = false; crop = (0, 0, 0, 0) }
         spinner.startAnimating()
         let media = VLCMedia(url: newURL)
@@ -291,6 +291,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     private let controls = UIView()
     private let playButton = UIButton(type: .system)
     private let slider = UISlider()
+    private let scrubLabel = UILabel() // tijd boven je vinger tijdens het schuiven
     private let timeLabel = UILabel()
     private let spinner = UIActivityIndicatorView(style: .large)
     private var hideTimer: Timer?
@@ -361,6 +362,14 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         slider.addTarget(self, action: #selector(sliderStart), for: .touchDown)
         slider.addTarget(self, action: #selector(sliderMoved), for: .valueChanged)
         slider.addTarget(self, action: #selector(sliderEnd), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        scrubLabel.font = .monospacedDigitSystemFont(ofSize: 17, weight: .bold)
+        scrubLabel.textColor = .white
+        scrubLabel.textAlignment = .center
+        scrubLabel.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        scrubLabel.layer.cornerRadius = 8
+        scrubLabel.clipsToBounds = true
+        scrubLabel.isHidden = true
+        controls.addSubview(scrubLabel)
 
         spinner.color = .white
         spinner.hidesWhenStopped = true
@@ -545,8 +554,8 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         player.play()
         scheduleHide()
         scheduleBarChecks()
-        // Na 10 seconden nog steeds geen beeld? Dan is deze bron kapot: sluiten zodat de app de volgende probeert
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+        // Na 7 seconden nog steeds geen beeld? Dan is deze bron kapot: sluiten zodat de app meteen de volgende probeert
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7) { [weak self] in
             guard let self = self, !self.everPlayed, !self.finished, !self.casting else { return }
             self.finish(ended: false)
         }
@@ -752,6 +761,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
             media.addOption(":network-caching=\(Self.liveCaching)")
             media.addOption(":adaptive-logic=highest")
             Self.audioOptions(media)
+            audioChecked = false
             player.media = media
             player.play()
             return
@@ -782,13 +792,26 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
     }
     @objc private func back10() { seek(to: seconds - 10); scheduleHide() }
     @objc private func forward10() { seek(to: seconds + 10); scheduleHide() }
-    @objc private func sliderStart() { seeking = true; hideTimer?.invalidate() }
+    @objc private func sliderStart() { seeking = true; hideTimer?.invalidate(); placeScrub() }
     @objc private func sliderMoved() {
         let len = length
         if len > 0 { timeLabel.text = format(Double(slider.value) * len) + " / " + format(len) }
+        placeScrub()
+    }
+    // Grote tijd boven het bolletje terwijl je schuift (zoals Netflix), zodat je precies ziet waar je heen gaat
+    private func placeScrub() {
+        let len = length
+        guard len > 0, !live else { scrubLabel.isHidden = true; return }
+        scrubLabel.text = format(Double(slider.value) * len)
+        let thumb = slider.thumbRect(forBounds: slider.bounds, trackRect: slider.trackRect(forBounds: slider.bounds), value: slider.value)
+        let c = slider.convert(CGPoint(x: thumb.midX, y: thumb.minY), to: controls)
+        let w: CGFloat = 96, h: CGFloat = 34
+        scrubLabel.frame = CGRect(x: min(max(c.x - w / 2, 8), controls.bounds.width - w - 8), y: c.y - h - 10, width: w, height: h)
+        scrubLabel.isHidden = false
     }
     @objc private func sliderEnd() {
         seeking = false
+        scrubLabel.isHidden = true
         let len = length
         if len > 0 { seek(to: Double(slider.value) * len) } else { player.position = slider.value }
         scheduleHide()
@@ -922,6 +945,27 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         }
     }
 
+    // ---- Geluid: nooit het spoor met audiodescriptie ----
+    // Sommige programma's hebben naast het gewone geluid een spoor waarop een verteller uitlegt wat er in beeld
+    // gebeurt (voor blinden). Staat VLC daarop, dan meteen naar het gewone spoor.
+    private var audioChecked = false
+    private static func isDescription(_ name: String) -> Bool {
+        name.range(of: "visual|impaired|descri|narrat|verteller|commentary|slechtzien|blinden|\\[qad\\]|\\[nar\\]", options: [.regularExpression, .caseInsensitive]) != nil
+            || name.range(of: "\\bAD\\b", options: .regularExpression) != nil
+    }
+    private func enforceAudio() {
+        guard !audioChecked, player.time.intValue > 600 else { return }
+        guard let names = player.audioTrackNames as? [String], let indexes = player.audioTrackIndexes as? [NSNumber] else { return }
+        let tracks = zip(names, indexes).filter { $0.1.int32Value >= 0 }
+        // Sporen komen soms pas na een paar seconden binnen: tot 15 s blijven kijken
+        if tracks.count < 2 { if player.time.intValue > 15000 { audioChecked = true }; return }
+        audioChecked = true
+        let current = player.currentAudioTrackIndex
+        guard let now = tracks.first(where: { $0.1.int32Value == current }), Self.isDescription(now.0),
+              let normal = tracks.first(where: { !Self.isDescription($0.0) }) else { return }
+        player.currentAudioTrackIndex = normal.1.int32Value
+    }
+
     // ---- Ondertiteling: alleen Nederlands en Engels, de rest eruit gefilterd ----
     private static let prefKey = "tvSubtitleLanguage" // "nl", "en" of "off" (standaard: nl)
 
@@ -1034,6 +1078,7 @@ final class VLCPlayerViewController: UIViewController, VLCMediaPlayerDelegate, U
         everPlayed = true
         spinner.stopAnimating()
         enforceSubtitles()
+        enforceAudio()
         if abs(seconds - lastProgress) >= 5 { lastProgress = seconds; onProgress?(seconds, length) }
         if !live { updateSeriesButtons() }
         if seeking || live { return }

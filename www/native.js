@@ -10,7 +10,8 @@ const AV = Capacitor.Plugins?.CapacitorVideoPlayer || reg?.('CapacitorVideoPlaye
 const VLC = Capacitor.Plugins?.VLCPlayer || reg?.('VLCPlayer');
 if (!AV && !VLC) return;
 
-const src = (kind, id, ext) => { const d = window.TVBackend.direct(); return `${d.base}/${kind}/${d.creds}/${id}.${ext}`; };
+// Adres bij de aanbieder; het account kiest de app zelf (primair, of het andere als daar al iemand kijkt)
+const src = (kind, id, ext) => window.TVBackend.pick(`${kind}/${id}.${ext}`, kind !== 'live');
 const APPLE_EXT = /^(mp4|m4v|mov|m3u8)$/i;
 
 let cur = null;
@@ -101,11 +102,16 @@ playLive = function (item, ctx) {
     // Niet vooraf proberen: elke proefverbinding bezet een scherm bij de aanbieder. VLC meldt een kapotte bron zelf binnen 10 s
     if (run !== playRun) return;
     if (i > 0) toast('Andere bron geprobeerd');
+    const url = await src('live', sources[i], 'ts');
+    if (run !== playRun) return;
+    startLive(i, url, false);
+  };
+  const startLive = (i, url, otherAcc) => {
     const t0 = Date.now();
     play({
-      url: src('live', sources[i], 'ts'), title: tidyName(item.n), sub: 'Live', live: true,
+      url, title: tidyName(item.n), sub: 'Live', live: true,
       // Vegen in de speler: volgende/vorige zender uit dezelfde rij, zonder de speler te sluiten
-      zap: dir => {
+      zap: async dir => {
         const list = ctx && ctx.length > 1 ? ctx : null; if (!list) return;
         let idx = list.findIndex(x => String(x.id) === String(item.id));
         idx = (idx + dir + list.length) % list.length;
@@ -113,9 +119,16 @@ playLive = function (item, ctx) {
         const k2 = favKey('live', item.id);
         items.set(k2, { ...item, type: 'live' });
         saveHist({ k: k2, type: 'live', id: item.id, n: item.n, i: item.i, alt: item.alt });
-        VLC.switchTo({ url: src('live', item.id, 'ts'), title: tidyName(item.n) }).catch(() => {});
+        VLC.switchTo({ url: await src('live', item.id, 'ts'), title: tidyName(item.n) }).catch(() => {});
       },
-      exit: (pos, dur, user) => { if (!user && pos < 0.5 && Date.now() - t0 < 40000 && i + 1 < sources.length) tryIdx(i + 1); },
+      exit: async (pos, dur, user) => {
+        if (user || pos >= 0.5 || Date.now() - t0 >= 40000 || run !== playRun) return;
+        // Was dit account vol (iemand anders keek)? Dan eerst dezelfde zender via het andere account
+        const alt = otherAcc ? null : await window.TVBackend.failed(url, `live/${sources[i]}.ts`, false);
+        if (run !== playRun) return;
+        if (alt) return startLive(i, alt, true);
+        if (i + 1 < sources.length) tryIdx(i + 1);
+      },
     }, true); // Zenders altijd in VLC: Apple's speler haperde of gaf alleen het QuickTime-teken bij deze streams
   };
   tryIdx(0);
@@ -174,33 +187,48 @@ playVod = function (o) {
       if (first) { first.tried = true; sources.push({ ...first, dead: false, forced: true }); return tryIdx(i); }
       toast('Deze film/aflevering werkt nu niet. Probeer het later opnieuw.'); return;
     }
-    let url = s.url || src(o.kind, s.id, s.e);
-    if (!s.url && !s.forced && !(await alive(url))) { s.dead = true; return tryIdx(i + 1); }
+    let url = s.url || await src(o.kind, s.id, s.e);
+    const picked = url, path = `${o.kind}/${s.id}.${s.e}`;
+    if (!s.url && !s.forced && !(await alive(url))) {
+      // Werkt niet: was dit account vol? Dan dezelfde versie via het andere account
+      const alt = await window.TVBackend.failed(picked, path, true);
+      if (alt && run === playRun) sources.splice(i + 1, 0, { ...s, url: alt, otherAcc: true });
+      s.dead = true; return tryIdx(i + 1);
+    }
     url = finalURL.get(url) || url;
     if (run !== playRun) return;
     if (i > 0) toast('Andere versie geprobeerd');
     const t0 = Date.now();
-    let played = false;
+    let played = false, lastDur = o.duration || 0;
     play({
       url, title: o.title, sub: o.sub || '', start: o.start || 0, duration: o.duration || 0, run,
       series: o.kind === 'series', nextTitle: o.next ? (o.nextLabel || 'volgende') : '', castFirst,
       exit: (pos, dur, user) => {
-        if (!user && pos < 0.5 && Date.now() - t0 < 45000 && !played) return tryIdx(i + 1);
+        if (!user && pos < 0.5 && Date.now() - t0 < 45000 && !played) {
+          // Account vol? Dan dezelfde versie via het andere account, anders meteen de volgende versie
+          if (!s.url && !s.otherAcc) return window.TVBackend.failed(picked, path, true).then(alt => {
+            if (run !== playRun) return;
+            if (alt) sources.splice(i + 1, 0, { ...s, url: alt, otherAcc: true, forced: true });
+            tryIdx(i + 1);
+          });
+          return tryIdx(i + 1);
+        }
         if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || o.duration || 0 });
       },
       // Tussendoor bewaren (elke 10 s): ook als de app wordt afgesloten of de telefoon uitvalt, weet hij waar je was
-      progress: (pos, dur) => { played = true; if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || o.duration || 0 }); },
-      ended: () => { if (o.hist) saveHist({ ...o.hist, pos: o.duration || 0, dur: o.duration || 0 }); if (o.next) setTimeout(o.next, 600); },
+      progress: (pos, dur) => { played = true; if (dur > 0) lastDur = dur; if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || lastDur }); },
+      // Afgelopen: als "helemaal gezien" bewaren (ook als de lengte onbekend was), zodat verder kijken de volgende aflevering neemt
+      ended: () => { if (o.hist) { const d = lastDur || 1; saveHist({ ...o.hist, pos: d, dur: d }); } if (o.next) setTimeout(o.next, 600); },
     }, true);
   };
   tryIdx(0);
 };
 
 // Terugkijken: rechtstreeks het programma van die dag bij de aanbieder
-playArchive = function (ch, p, dayLabel) {
+playArchive = async function (ch, p, dayLabel) {
   const at = p.at.replace(' ', ':').replace(/:(\d\d)$/, '-$1');
   const dur = Math.max(1, Math.ceil((p.e - p.s) / 60)) + 2;
-  const d = window.TVBackend.direct();
-  playVod({ kind: 'archive', url: `${d.base}/timeshift/${d.creds}/${dur}/${at}/${ch.id}.m3u8`, start: 0, duration: 0, title: p.t, sub: `${tidyName(ch.n)} · ${dayLabel} ${hhmm(p.s)}`, favKey: null, hist: null });
+  const url = await window.TVBackend.pick(`timeshift/${dur}/${at}/${ch.id}.m3u8`, true);
+  playVod({ kind: 'archive', url, start: 0, duration: 0, title: p.t, sub: `${tidyName(ch.n)} · ${dayLabel} ${hhmm(p.s)}`, favKey: null, hist: null });
 };
 })();

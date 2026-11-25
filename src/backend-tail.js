@@ -69,6 +69,7 @@ const searchCache = new Map();
 // Alles alvast klaarzetten na het openen, zodat wisselen naar Films/Series/Zoeken meteen gaat
 function warmUp() {
   if (!cfg) return;
+  refreshCatalog().catch(() => {});
   loadNetflixNL();
   // Elke stap pas als je even niet tikt of scrolt: zo reageert de app altijd meteen op je vinger
   // (dit rekenwerk deelt de telefoon met het scherm). Trage telefoons wachten wat langer.
@@ -98,7 +99,17 @@ async function route(url, init) {
   if (p === '/api/session') {
     if (!cfg) return { loggedIn: false, app: true };
     if (!account) { try { account = await (await realFetch(apiURL({}), { signal: AbortSignal.timeout(15000) })).json(); } catch {} }
-    return { loggedIn: true, app: true, server: cfg.server, username: cfg.username, user: account?.user_info || null, ffmpeg: false, lan: null };
+    return { loggedIn: true, app: true, server: cfg.server, username: catalogAcc().username, user: account?.user_info || null, ffmpeg: false, lan: null, accounts: accList().length };
+  }
+  // Accounts (zelfde als op de pc): bekijken, toevoegen, primair maken, weghalen
+  if (p === '/api/accounts' && cfg) {
+    if (method === 'POST') { const r = await addAccount(body()); account = null; return r; }
+    return accountsView();
+  }
+  if ((m = p.match(/^\/api\/accounts\/(\d+)(\/primary)?$/)) && cfg) {
+    const i = Number(m[1]);
+    if (m[2] && method === 'POST') { const r = setPrimary(i); account = null; return r; }
+    if (!m[2] && method === 'DELETE') { const r = removeAccount(i); account = null; return r; }
   }
   if (p === '/api/login' && method === 'POST') {
     const b = body();
@@ -108,7 +119,7 @@ async function route(url, init) {
     try { info = await (await realFetch(apiURL({}, c), { signal: AbortSignal.timeout(15000) })).json(); }
     catch (e) { throw new HttpError(502, 'Server niet bereikbaar (' + (e && e.message || e) + ')'); }
     if (Number(info?.user_info?.auth) !== 1) throw new HttpError(401, 'Gebruikersnaam of wachtwoord klopt niet');
-    cfg = c; account = info; cache.clear(); writeJSON('config', cfg);
+    cfg = c; account = info; cache.clear(); accSticky.clear(); catalogPick = null; writeJSON('config', cfg);
     warmUp();
     return { ok: true };
   }
@@ -214,12 +225,7 @@ async function route(url, init) {
   if (p === '/api/vodinfo') return cached('vi:' + q.id, () => api({ action: 'get_vod_info', vod_id: q.id }), true, 7 * 864e5);
   if (p === '/api/seriesinfo') return cached('si:' + q.id, () => api({ action: 'get_series_info', series_id: q.id }), true, 864e5);
   if (p === '/api/sport') return sportToday();
-  if (p === '/api/conns') {
-    try {
-      const u = (await (await realFetch(apiURL({}), { signal: AbortSignal.timeout(5000) })).json()).user_info || {};
-      return { active: Number(u.active_cons) || 0, max: Number(u.max_connections) || 0 };
-    } catch { return { active: -1, max: 0 }; }
-  }
+  if (p === '/api/conns') return connTotals().catch(() => ({ active: -1, max: 0 }));
   if (p === '/api/subs') return subtitleList(q.type === 'series' ? 'series' : 'movie', q.name || '', q.year, q.tmdb, q.s, q.e).catch(() => []);
   if (p === '/api/epgnow') return epgNow(String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)));
   if (p === '/api/extra') return titleExtra(q.type === 'series' ? 'series' : 'vod', q.name || '').catch(() => ({ imdb: 0, similar: [] }));
@@ -242,7 +248,23 @@ window.fetch = async (input, init = {}) => {
   }
 };
 
-// Voor de speler: rechtstreekse adressen bij de aanbieder
-window.TVBackend = { direct: () => cfg ? { base: base(), creds: creds() } : null };
+// Voor de speler: rechtstreekse adressen bij de aanbieder.
+// pick("live/123.ts") kiest het account (primair, of het andere als daar al iemand kijkt); failed(url) = dit account
+// gaf geen beeld (vol): de volgende keer meteen het andere.
+const urlAcc = new Map();
+window.TVBackend = {
+  direct: () => cfg ? { base: accBase(catalogAcc()), creds: accCreds(catalogAcc()) } : null,
+  pick: async (p, vod) => { const r = await streamURL(p, { sticky: vod ? STICKY_VOD : STICKY_LIVE }); urlAcc.set(r.url, r.acc); return r.url; },
+  failed: async (url, p, vod) => {
+    const a = urlAcc.get(url); if (!a || accList().length < 2) return null;
+    // Alleen wisselen als dat account echt vol zat; anders is de bron zelf kapot en is de volgende bron sneller
+    const u = await accInfo(a, 0);
+    if (u && accValid(u) && (Number(u.active_cons) || 0) < (Number(u.max_connections) || 1)) return null;
+    markBusy(a);
+    const r = await streamURL(p, { sticky: vod ? STICKY_VOD : STICKY_LIVE, avoid: a }); urlAcc.set(r.url, r.acc);
+    return r.url !== url ? r.url : null;
+  },
+  accounts: () => accList().length,
+};
 warmUp();
 })();

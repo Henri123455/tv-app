@@ -34,9 +34,10 @@ const idb = (() => {
 
 let cfg = readJSON('config', null);
 let account = null;
+const saveCfg = () => writeJSON('config', cfg);
 const base = () => cfg.server.replace(/\/+$/, '');
 const creds = () => `${encodeURIComponent(cfg.username)}/${encodeURIComponent(cfg.password)}`;
-function apiURL(params, c = cfg) {
+function apiURL(params, c = catalogAcc()) {
   const u = new URL(c.server.replace(/\/+$/, '') + '/player_api.php');
   u.searchParams.set('username', c.username);
   u.searchParams.set('password', c.password);

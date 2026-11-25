@@ -219,10 +219,28 @@ let histTimer;
 function mergeHist(a, b) {
   const m = new Map();
   for (const x of [...(a || []), ...(b || [])]) { const o = m.get(x.k); if (!o || (x.t || 0) > (o.t || 0)) m.set(x.k, x); }
-  return [...m.values()].sort((x, y) => (y.t || 0) - (x.t || 0)).slice(0, 60);
+  return capHist([...m.values()].sort((x, y) => (y.t || 0) - (x.t || 0)));
 }
+// Zenders tellen apart mee: vroeger duwde zappen langs veel zenders je films en series uit "verder kijken"
+const capHist = list => { let live = 0, rest = 0; return list.filter(x => x.type === 'live' ? ++live <= 30 : ++rest <= 150); };
+// Zelfde titel, andere versie/bron (ander nummer bij de aanbieder): toch weten waar je was
+const histName = n => tidyName(n || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+function findHist(type, it) {
+  const k = favKey(type, it.id), n = histName(it.n);
+  return hist().find(x => x.k === k) || (n ? hist().find(x => x.type === type && (x.pos || x.ep) && histName(x.n) === n) : null);
+}
+// Per aflevering onthouden waar je was (niet alleen de laatste aflevering)
+const epPos = (h, id) => { const p = h?.eps?.[id]; if (p) return { pos: p[0], dur: p[1] }; return h?.ep && String(h.ep.id) === String(id) ? { pos: h.pos || 0, dur: h.dur || 0 } : null; };
 function saveHist(entry) {
-  S.hist = [{ ...entry, t: Date.now() }, ...S.hist.filter(x => x.k !== entry.k)].slice(0, 60);
+  const prev = S.hist.find(x => x.k === entry.k);
+  if (entry.type === 'series') {
+    const eps = { ...(prev?.eps || {}) };
+    if (entry.ep && entry.pos != null) { delete eps[entry.ep.id]; eps[entry.ep.id] = [Math.round(entry.pos), Math.round(entry.dur || 0)]; }
+    const keys = Object.keys(eps); for (const x of keys.slice(0, Math.max(0, keys.length - 300))) delete eps[x];
+    entry = { ...entry, eps };
+    if (!entry.ep && prev?.ep) entry = { ...entry, ep: prev.ep, pos: prev.pos, dur: prev.dur };
+  }
+  S.hist = capHist([{ ...entry, t: Date.now() }, ...S.hist.filter(x => x.k !== entry.k)]);
   store.set(profileKey('history'), S.hist);
   clearTimeout(histTimer); histTimer = setTimeout(flushHist, 3000);
 }
@@ -1261,6 +1279,7 @@ function sourceButton(type, it, current, onPick) {
 
 async function openMovie(it) {
   const k = favKey('vod', it.id);
+  const hk = findHist('vod', it)?.k || k;
   showSheet(`<div class="sheet-hero"><div><h2>${esc(tidyName(it.n))}</h2></div></div><div class="sheet-body"><p class="muted">Laden…</p></div>`);
   let info = {};
   try { info = await getInfo('vod', it.id); } catch {}
@@ -1269,7 +1288,7 @@ async function openMovie(it) {
   const i = metaMatches(it.n, raw) ? raw : { duration_secs: raw.duration_secs, duration: raw.duration };
   const ext = md.container_extension || it.e || 'mp4';
   const dur = durSecs(i) || durSecs(raw); // lengte: ook als de aanbieder alleen "114" (minuten) geeft
-  const h = hist().find(x => x.k === k);
+  const h = hist().find(x => x.k === hk);
   const resume = h && h.pos > 30 && (!h.dur || h.pos < h.dur - 60) ? h.pos : 0;
   const backdrops = [...(i.backdrop_path || []), i.cover_big, i.movie_image];
   const rating = Number(i.rating) || it.r;
@@ -1291,7 +1310,7 @@ async function openMovie(it) {
   sheetExtras('vod', it, raw.youtube_trailer || i.youtube_trailer);
   const go = (start, v, rest) => playVod({ kind: 'movie', id: v ? v.id : it.id, ext: v ? v.e || 'mp4' : ext, hq: v ? !!v.hq : !!it.hq, start, duration: dur, title: tidyName(i.name || it.n), sub: (i.releasedate || '').slice(0, 4), favKey: k,
     subInfo: { type: 'movie', name: i.o_name || i.name || it.n, year: (i.releasedate || '').slice(0, 4) || nameYearOf(it.n), tmdb: i.tmdb_id || '' },
-    item: v ? { ...it, hq: v.hq, alt: rest.map(x => ({ id: x.id, e: x.e })) } : it, hist: { k, type: 'vod', id: it.id, n: it.n, i: it.i } });
+    item: v ? { ...it, hq: v.hq, alt: rest.map(x => ({ id: x.id, e: x.e })) } : it, hist: { k: hk, type: 'vod', id: it.id, n: it.n, i: it.i } });
   $('#mPlay').onclick = () => go(resume);
   $('#mRestart') && ($('#mRestart').onclick = () => go(0));
   addTvButton(() => go(resume));
@@ -1307,7 +1326,8 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
   const i = metaMatches(it.n, raw) ? raw : {};
   const eps = info.episodes || {};
   const seasons = Object.keys(eps).sort((a, b) => a - b);
-  const h = hist().find(x => x.k === k);
+  const h = findHist('series', it);
+  const hk = h?.k || k;
   const backdrops = i.name ? [...(i.backdrop_path || []), it.b] : [];
   // Jaartal = nieuwste aflevering van het laatste seizoen, of het nieuwste jaar in de naam (zelfde regel als op de kaarten)
   const yearOf = d => { const y = +String(d || '').slice(0, 4); return y > 1900 && y <= new Date().getFullYear() + 1 ? y : 0; };
@@ -1349,7 +1369,7 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
       kind: 'series', id: e.id, ext: e.container_extension || 'mp4', start, duration: durSecs(e.info),
       title: tidyName(i.name || it.n), sub: `S${e.season} A${e.episode_num} · ${tidyName(e.title)}`, favKey: k, item: it,
       subInfo: { type: 'series', name: i.name || it.n, year: (i.releaseDate || i.release_date || '').slice(0, 4) || nameYearOf(it.n), tmdb: i.tmdb || i.tmdb_id || '', s: e.season, e: e.episode_num },
-      hist: { k, type: 'series', id: it.id, n: it.n, i: it.i, b: it.b, ep: { id: e.id, season: e.season, num: e.episode_num } },
+      hist: { k: hk, type: 'series', id: it.id, n: it.n, i: it.i, b: it.b, ep: { id: e.id, season: e.season, num: e.episode_num } },
       next: flat[idx + 1] ? () => playEp(flat[idx + 1]) : null,
       nextLabel: flat[idx + 1] ? `S${flat[idx + 1].season} A${flat[idx + 1].episode_num}` : '',
     });
@@ -1357,10 +1377,10 @@ async function openSeries(it, src) { // src: een andere versie van de serie (via
   const showSeason = s => {
     $$('[data-season]').forEach(b => b.classList.toggle('active', b.dataset.season === s));
     $('.episodes').innerHTML = eps[s].map(e => `<button class="ep" data-ep="${esc(e.id)}">
-      <div class="thumb" data-bg="${esc(e.info?.movie_image || '')}">${h?.ep?.id == e.id && h.dur ? `<div class="progress"><i style="width:${Math.min(100, h.pos / h.dur * 100)}%"></i></div>` : ''}</div>
+      <div class="thumb" data-bg="${esc(e.info?.movie_image || '')}">${(pp => pp && pp.dur && pp.pos > 5 ? `<div class="progress"><i style="width:${Math.min(100, pp.pos / pp.dur * 100)}%"></i></div>` : '')(epPos(h, e.id))}</div>
       <div><h4>${esc(e.episode_num)}. ${esc(tidyName(e.title).replace(/^.*?S\d+E\d+\s*-?\s*/i, '') || 'Aflevering ' + e.episode_num)}</h4><p>${esc(e.info?.plot || e.info?.duration || '')}</p></div></button>`).join('');
     $$('.episodes .thumb[data-bg]').forEach(t => heroArt(t, t.dataset.bg, it.i || i.cover, 200));
-    $$('[data-ep]').forEach(b => b.onclick =() => { const e = flat.find(x => String(x.id) === b.dataset.ep); playEp(e, h?.ep?.id == e.id ? h.pos : 0); });
+    $$('[data-ep]').forEach(b => b.onclick =() => { const e = flat.find(x => String(x.id) === b.dataset.ep); const pp = epPos(h, e.id); playEp(e, pp && pp.pos > 30 && (!pp.dur || pp.pos < pp.dur - 60) ? pp.pos : 0); });
   };
   $$('[data-season]').forEach(b => b.onclick = () => showSeason(b.dataset.season));
   if (seasons.length) showSeason(h?.ep && eps[h.ep.season] ? String(h.ep.season) : seasons[0]);
@@ -1449,6 +1469,8 @@ function closePlayer() {
   try { screen.orientation?.unlock?.(); } catch {}
   if (video.webkitDisplayingFullscreen) try { video.webkitExitFullscreen(); } catch {}
   P.item = null; P.favKey = null;
+  hidePreview(); clearTimeout(skipTimer); skipT = null;
+  seek.style.setProperty('--val', '0%'); seek.style.setProperty('--buf', '0%');
   $('#pBadge').textContent = '';
   cancelStats();
 }
@@ -1485,6 +1507,8 @@ async function attach(src, { forceNative = false } = {}) {
     hls.on(Hls.Events.ERROR, (_, d) => {
       if (!d.fatal) return;
       if (d.response?.code === 509) return tooMany();
+      // 410 = de pc kreeg geen beeld van deze bron (ook niet via het andere account): meteen de volgende bron
+      if (d.response?.code === 410 && P.live && P.stages) { P.stage = P.stages.length - 1; return fallback(); }
       if (d.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecover++ < 1) { hls.recoverMediaError(); return; }
       if (d.type === Hls.ErrorTypes.NETWORK_ERROR && P.tries++ < 1) { setTimeout(() => hls.startLoad(), 800); return; }
       fallback();
@@ -1729,7 +1753,7 @@ function fallback() {
   if (!P.live && P.opts && !P.opts.url) {
     const alts = P.opts.alts ||= (P.opts.item?.alt || []).filter(a => typeof a === 'object' && String(a.id) !== String(P.opts.id));
     const a = alts.shift();
-    if (a) { toast('Andere versie geprobeerd'); Object.assign(P.opts, { id: a.id, ext: a.e || 'mp4', hq: !!a.hq, viaPc: false }); P.tries = 0; seekVod(P.opts.start || 0, true); return; }
+    if (a) { toast('Andere versie geprobeerd'); const t = resumePos(); Object.assign(P.opts, { id: a.id, ext: a.e || 'mp4', hq: !!a.hq, viaPc: false }); P.tries = 0; seekVod(t, true); return; }
   }
   destroyEngines();
   showMsg('Afspelen lukt niet', P.live ? 'Deze zender reageert nu niet. Probeer een andere zender.' : 'Deze film/aflevering kan niet worden geladen.',
@@ -1761,16 +1785,17 @@ async function switchSource(i, auto) {
     // Pc: zenders met Dolby-geluid (NPO e.d.) of HEVC-beeld via de pc (geluid naar AAC, beeld onaangeroerd).
     // Gewone H.264+AAC-zenders direct als .ts (sneller, en het scherm komt na sluiten meteen vrij). Onbekend = via de pc (werkt altijd), en meten voor de volgende keer.
     const info = liveInfo[id];
-    const direct = info && info.audio === 'aac' && info.codec === 'h264';
+    // (multi = meer geluidssporen, bijv. met verteller: dan via de pc, die het gewone geluid kiest)
+    const direct = info && info.v2 && !info.multi && info.audio === 'aac' && info.codec === 'h264';
     const viaPc = info?.codec === 'hevc' && !HEVC_OK ? `/play/fmp4/x/${id}/index.m3u8` : `/play/fmp4/w/${id}/index.m3u8`;
     P.stages = direct ? ['ts:' + id, viaPc, `/play/live/${id}.m3u8`] : [viaPc, `/play/live/${id}.m3u8`];
-    if (!info) api('/api/codec?id=' + id).then(r => { if (r.codec) { liveInfo[id] = r; store.set('liveInfo', liveInfo); } }).catch(() => {});
+    if (!info?.v2) api('/api/codec?id=' + id).then(r => { if (r.codec) { liveInfo[id] = r; store.set('liveInfo', liveInfo); } }).catch(() => {});
   } else P.stages = liveStages(id);
   startStage();
 }
 
 function playLive(item, ctx) {
-  P.live = true; P.remux = false; P.offset = 0; P.opts = null;
+  P.live = true; P.remux = false; P.offset = 0; P.opts = null; P.lastStall = 0;
   stopSubs();
   P.item = item; P.ctx = ctx; P.idx = Math.max(0, ctx.findIndex(x => x.id === item.id));
   P.favKey = favKey('live', item.id);
@@ -1819,7 +1844,7 @@ function vodURL(o, start) {
   return { url: `/play/remux/${o.kind}/${o.id}.${o.ext}?t=${Math.floor(start)}`, remux: true };
 }
 function playVod(o) {
-  P.live = false; P.item = { id: o.id }; P.opts = o; P.tries = 0; P.emptyTries = 0; P.favKey = o.favKey; P.stages = null; P.sources = [];
+  P.live = false; P.item = { id: o.id }; P.opts = o; P.tries = 0; P.lastPos = 0; P.emptyTries = 0; P.favKey = o.favKey; P.stages = null; P.sources = [];
   P.duration = o.duration || 0;
   playerEl.classList.remove('live');
   $('#pTitle').textContent = o.title;
@@ -1851,6 +1876,12 @@ function seekVod(t, first) {
   t = Math.max(0, P.duration ? Math.min(t, P.duration - 2) : t);
   const v = vodURL(o, t);
   if (!first && !P.remux && !v.remux) { video.currentTime = t; return; }
+  // Omgezette film: ligt het doel al binnen (bijv. 10 s terug of iets vooruit)? Dan daar heen springen in plaats
+  // van de omzetting opnieuw te starten (dat is meteen, zonder laden)
+  if (!first && P.remux && v.remux) {
+    const rel = t - P.offset, b = video.buffered;
+    for (let i = 0; i < b.length; i++) if (rel >= b.start(i) && rel <= b.end(i) - 1) { video.currentTime = rel; return; }
+  }
   P.remux = v.remux; P.offset = v.remux ? Math.floor(t) : 0;
   attach(v.url);
   if (v.remux) startSubs(o, P.offset); else stopSubs();
@@ -1859,13 +1890,16 @@ function seekVod(t, first) {
   if (!v.remux && (t > 0 || growing)) video.addEventListener('loadedmetadata', () => { video.currentTime = t; }, { once: true });
 }
 const curTime = () => P.offset + (video.currentTime || 0);
+// Waar je echt was (laatst gespeelde plek). Bij een fout of andere versie daar verder, niet bij 0 of het oude startpunt
+const resumePos = () => (P.lastPos > 5 ? P.lastPos : 0) || P.opts?.start || curTime();
 const totalTime = () => P.duration || (isFinite(video.duration) ? P.offset + video.duration : 0);
 
 let lastSave = 0;
 function saveProgress() {
   if (!P.opts || P.live || !P.opts.hist) return;
   if (P.duration && curTime() > P.duration + 5) P.duration = 0;
-  const pos = curTime(), dur = totalTime();
+  if (!P.lastPos) return; // nog niets gespeeld: niets overschrijven
+  const pos = curTime() > 5 ? curTime() : P.lastPos, dur = totalTime();
   if (pos < 5) return;
   saveHist({ ...P.opts.hist, pos, dur });
 }
@@ -1880,8 +1914,8 @@ video.addEventListener('error', () => {
   if (P.hls || P.ts || playerEl.hidden || !video.getAttribute('src')) return;
   if (P.live && P.tries++ < 1) { setTimeout(() => attach(P.src), 800); return; }
   // Rechtstreeks lukte niet? Dan via de pc
-  if (!P.live && P.opts && /^https?:/.test(P.src || '') && !P.opts.viaPc) { P.opts.viaPc = true; const t = curTime(); seekVod(t, true); return; }
-  if (!P.live && P.opts && !P.opts.url && !P.remux && S.session?.ffmpeg && !IS_IOS) { P.remux = true; P.offset = Math.floor(curTime()); attach(`/play/remux/${P.opts.kind}/${P.opts.id}.${P.opts.ext}?t=${P.offset}`); return; }
+  if (!P.live && P.opts && /^https?:/.test(P.src || '') && !P.opts.viaPc) { P.opts.viaPc = true; seekVod(resumePos(), true); return; }
+  if (!P.live && P.opts && !P.opts.url && !P.remux && S.session?.ffmpeg && !IS_IOS) { P.remux = true; P.offset = Math.floor(resumePos()); attach(`/play/remux/${P.opts.kind}/${P.opts.id}.${P.opts.ext}?t=${P.offset}`); return; }
   fallback();
 });
 video.addEventListener('ended', () => { saveProgress(); hideNextUp(); if (P.opts?.next) P.opts.next(); });
@@ -1923,7 +1957,8 @@ video.addEventListener('timeupdate', () => {
   if (P.live) return;
   const c = curTime(), d = totalTime();
   $('#pCur').textContent = fmtTime(c); $('#pDur').textContent = fmtTime(d);
-  if (!seeking && d) $('#pSeek').value = Math.round(c / d * 1000);
+  if (!video.seeking && video.currentTime > 0.5 && c > 1) P.lastPos = c;
+  if (!seeking && skipT == null && d) { seek.value = Math.round(c / d * 1000); setBar(c / d); }
   if (Date.now() - lastSave > 5000) { lastSave = Date.now(); saveProgress(); }
 });
 
@@ -1932,8 +1967,14 @@ let stall = { t: -1, n: 0 };
 setInterval(() => {
   if (playerEl.hidden || video.paused || !P.live || !$('#pMsg').hidden) { stall.n = 0; return; }
   if (video.currentTime === stall.t) stall.n++; else { stall.n = 0; stall.t = video.currentTime; }
-  if (stall.n === 4 && P.hls) { P.hls.startLoad(); }
-  if (stall.n >= 8) { stall.n = 0; startStage(); }
+  if (stall.n === 3 && P.hls) { P.hls.startLoad(); }
+  if (stall.n >= 6) {
+    // Tweede keer vastgelopen binnen anderhalve minuut? Dan is deze bron niet goed: meteen de volgende bron
+    stall.n = 0;
+    const again = Date.now() - (P.lastStall || 0) < 90000;
+    P.lastStall = Date.now();
+    if (again && P.srcIdx < P.sources.length - 1) switchSource(P.srcIdx + 1, true); else startStage();
+  }
 }, 1000);
 
 // Beeldkwaliteit + echte fps meten
@@ -1957,7 +1998,7 @@ function updateBadge() {
 }
 
 // Bediening
-function togglePlay() { video.paused ? video.play().catch(() => {}) : video.pause(); }
+function togglePlay() { if (video.paused) { video.play().catch(() => {}); flash('play'); } else { video.pause(); flash('pause'); } }
 $('#pPlay').onclick = togglePlay;
 $('#pBack').onclick = () => closeTop();
 $('#pPrev').onclick = () => zap(-1);
@@ -1979,9 +2020,84 @@ function toggleFull() {
 video.addEventListener('dblclick', toggleFull);
 video.addEventListener('click', () => { if (matchMedia('(hover: hover)').matches) togglePlay(); });
 
-const seek = $('#pSeek');
-seek.addEventListener('input', () => { seeking = true; $('#pCur').textContent = fmtTime(seek.value / 1000 * totalTime()); poke(); });
-seek.addEventListener('change', () => { seeking = false; seekVod(seek.value / 1000 * totalTime()); });
+// ---- Tijdbalk zoals Netflix: voorbeeldbeeldje boven de balk tijdens het schuiven of erover bewegen ----
+// Beeldjes maakt de pc (alleen het dichtstbijzijnde sleutelbeeld, 320 breed), per 10 seconden en één tegelijk:
+// de film zelf blijft gewoon doorlopen. Wat al eens gemaakt is, staat meteen in beeld.
+const seek = $('#pSeek'), bar = $('#pBar'), pv = $('#pPreview'), pvImg = $('#pPreview img'), pvTime = $('#pPreview .pv-time');
+const pv$ = { want: null, busy: false, fails: 0, timer: 0, done: new Set(), film: '' };
+const filmKey = () => P.opts ? `${P.opts.kind}/${P.opts.id}.${P.opts.ext}` : '';
+const thumbsOn = () => !P.live && P.opts && !P.opts.url && /^(movie|series)$/.test(P.opts.kind) && S.session?.ffmpeg && !S.session?.app && pv$.fails < 3;
+const thumbURL = t => `/play/thumb/${filmKey()}?t=${t}`;
+function setBar(f) { seek.style.setProperty('--val', (f * 100).toFixed(2) + '%'); }
+function showPreview(f) {
+  const d = totalTime(); if (!d || P.live) return hidePreview();
+  f = Math.min(1, Math.max(0, f));
+  const t = f * d, w = bar.clientWidth, on = thumbsOn();
+  pv.hidden = false;
+  pv.classList.toggle('noimg', !on);
+  const half = (pv.offsetWidth || (on ? 244 : 80)) / 2;
+  pv.style.transform = `translateX(${Math.min(w - half, Math.max(half, f * w)) - half}px)`;
+  pvTime.textContent = fmtTime(t);
+  if (!on) return;
+  if (pv$.film !== filmKey()) { pv$.film = filmKey(); pv$.done.clear(); pvImg.removeAttribute('src'); }
+  const tt = Math.round(t / 10) * 10;
+  pv$.want = tt;
+  if (pv$.done.has(tt)) { pvImg.src = thumbURL(tt); pv.classList.remove('loading'); return; }
+  pv.classList.add('loading');
+  clearTimeout(pv$.timer); pv$.timer = setTimeout(loadThumb, 70);
+}
+function loadThumb() {
+  if (pv$.busy || pv$.want == null || pv.hidden) return;
+  const t = pv$.want, film = filmKey(), u = thumbURL(t), im = new Image();
+  pv$.busy = true;
+  im.onload = () => { pv$.busy = false; pv$.fails = 0; if (film !== filmKey()) return; pv$.done.add(t); if (pv$.want === t) { pvImg.src = u; pv.classList.remove('loading'); } else loadThumb(); };
+  im.onerror = () => { pv$.busy = false; pv$.fails++; if (pv$.want !== t) loadThumb(); else if (!thumbsOn()) pv.classList.add('noimg'); };
+  im.src = u;
+}
+function hidePreview() { pv.hidden = true; pv$.want = null; }
+const barFrac = x => { const r = seek.getBoundingClientRect(); return r.width ? (x - r.left) / r.width : 0; };
+bar.addEventListener('pointermove', e => { if (e.pointerType === 'mouse' && !seeking) showPreview(barFrac(e.clientX)); }, { passive: true });
+bar.addEventListener('pointerleave', () => { if (!seeking) hidePreview(); });
+seek.addEventListener('input', () => {
+  seeking = true; bar.classList.add('drag');
+  const f = seek.value / 1000;
+  setBar(f); showPreview(f);
+  $('#pCur').textContent = fmtTime(f * totalTime()); poke();
+});
+seek.addEventListener('change', () => {
+  seeking = false; bar.classList.remove('drag');
+  if (!bar.matches(':hover')) hidePreview();
+  seekVod(seek.value / 1000 * totalTime());
+});
+// Hoeveel er al binnen is (lichtere strook achter het gekleurde deel)
+video.addEventListener('progress', () => {
+  const d = totalTime(); if (!d || P.live) return;
+  const b = video.buffered; let end = 0;
+  for (let i = 0; i < b.length; i++) if (b.start(i) <= video.currentTime + 1 && b.end(i) > end) end = b.end(i);
+  seek.style.setProperty('--buf', Math.min(100, (P.offset + end) / d * 100).toFixed(2) + '%');
+});
+// Kort een groot teken in het midden (pauze/afspelen/10 s), zoals Netflix
+const FLASH = { play: '<svg viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" fill="currentColor"/></svg>', pause: '<svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>' };
+function flash(what) {
+  const f = $('#pFlash'); if (!f) return;
+  f.innerHTML = FLASH[what] || esc(what);
+  f.classList.remove('show'); void f.offsetWidth; f.classList.add('show');
+}
+// Snel achter elkaar op +10 tikken: telt op vanaf het doel, en pas na een korte pauze echt springen
+// (bij omgezette films is elke sprong een nieuwe start; zo blijft het vlot)
+let skipT = null, skipTimer = 0;
+function skipBy(d) {
+  if (P.live || !P.opts) return;
+  const tot = totalTime();
+  skipT = Math.max(0, Math.min((skipT ?? curTime()) + d, tot ? tot - 2 : Infinity));
+  if (tot) { seek.value = Math.round(skipT / tot * 1000); setBar(skipT / tot); }
+  $('#pCur').textContent = fmtTime(skipT);
+  flash(d > 0 ? '+10' : '-10'); poke();
+  clearTimeout(skipTimer);
+  skipTimer = setTimeout(() => { const t = skipT; skipT = null; seekVod(t); }, P.remux ? 450 : 120);
+}
+$('#pRew').onclick = e => { e.stopPropagation(); skipBy(-10); };
+$('#pFwd').onclick = e => { e.stopPropagation(); skipBy(10); };
 
 // Zenderlijst / bron in zijpaneel
 $('#pList').onclick = () => { const s = $('#pSide'); if (!s.hidden && s.dataset.mode === 'list') { s.hidden = true; return; } renderChannelList(); };
@@ -2101,8 +2217,8 @@ document.addEventListener('keydown', e => {
     else if (k === 'Escape') { if (!$('#pSide').hidden) $('#pSide').hidden = true; else if (!document.fullscreenElement) closeTop(); }
     else if (P.live && (k === 'ArrowUp' || k === 'PageUp')) { e.preventDefault(); zap(-1); }
     else if (P.live && (k === 'ArrowDown' || k === 'PageDown')) { e.preventDefault(); zap(1); }
-    else if (!P.live && k === 'ArrowRight') seekVod(curTime() + 10);
-    else if (!P.live && k === 'ArrowLeft') seekVod(curTime() - 10);
+    else if (!P.live && (k === 'ArrowRight' || k === 'l')) { e.preventDefault(); skipBy(10); }
+    else if (!P.live && (k === 'ArrowLeft' || k === 'j')) { e.preventDefault(); skipBy(-10); }
     return;
   }
   if (e.key === 'Escape' && layers.length) closeTop();
@@ -2147,8 +2263,16 @@ $('#accountBtn').onclick = async () => {
     </div>
 
     <div class="group">
-      <h3>Abonnement</h3>
-      <div class="kv"><span>Status</span><span>${esc(u.status || '—')}</span><span>Geldig tot</span><span>${esc(exp)}</span><span>Schermen tegelijk</span><span>${esc(u.max_connections || '—')}</span><span>Gebruiker</span><span>${esc(S.session?.username)}</span></div>
+      <h3>Accounts</h3>
+      <div id="accList"><div class="kv"><span>Status</span><span>${esc(u.status || '—')}</span><span>Geldig tot</span><span>${esc(exp)}</span><span>Schermen tegelijk</span><span>${esc(u.max_connections || '—')}</span><span>Gebruiker</span><span>${esc(S.session?.username)}</span></div></div>
+      <p class="muted small">Met twee accounts werkt de app als één: hij kijkt op je primaire account, en kijkt daar al iemand, dan schakelt hij vanzelf naar het andere. Mijn lijst en verder kijken horen bij je profiel en gelden dus voor allebei.</p>
+      <button class="btn glass" id="accAddBtn">Account toevoegen</button>
+      <form class="acc-add" id="accAdd" hidden autocomplete="off">
+        <input name="server" placeholder="Server (leeg = dezelfde)" autocapitalize="off" spellcheck="false">
+        <input name="username" placeholder="Gebruikersnaam" required autocapitalize="off" spellcheck="false">
+        <input name="password" placeholder="Wachtwoord" required type="password">
+        <div class="acc-add-row"><button class="btn primary" type="submit">Toevoegen</button><span class="muted small" id="accAddMsg"></span></div>
+      </form>
     </div>
     <button class="btn glass" id="logoutBtn">${S.session?.app ? 'Uitloggen' : 'Uitloggen op deze pc'}</button></div>`);
   $$('[data-theme-pick]').forEach(b => b.onclick = () => {
@@ -2168,11 +2292,48 @@ $('#accountBtn').onclick = async () => {
     toast('Alles is opnieuw geladen');
   };
   $('#switchProfile').onclick = () => { closeTop(); setTimeout(showWho, 60); };
+  renderAccounts();
+  $('#accAddBtn').onclick = () => { const f = $('#accAdd'); f.hidden = !f.hidden; if (!f.hidden) f.username.focus(); };
+  $('#accAdd').onsubmit = async e => {
+    e.preventDefault();
+    const f = e.target, b = $('button', f), msg = $('#accAddMsg');
+    b.disabled = true; msg.textContent = 'Controleren…';
+    try {
+      const r = await fetch('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(f))) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || 'Toevoegen mislukt');
+      f.reset(); f.hidden = true; msg.textContent = '';
+      toast('Account toegevoegd'); renderAccounts(); updateConns();
+    } catch (err) { msg.textContent = err.message; } finally { b.disabled = false; }
+  };
   $('#logoutBtn').onclick = async () => { if (!confirm('Uitloggen? Je moet daarna opnieuw je server, gebruikersnaam en wachtwoord invullen.')) return; await fetch('/api/logout', { method: 'POST' }); location.reload(); };
   if (lan) {
     try { await loadQR(); const qr = qrcode(0, 'M'); qr.addData(lan); qr.make(); $('#qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); } catch {}
   }
 };
+
+// Lijst met accounts: status, geldig tot, wie er kijkt; primair maken en weghalen
+async function renderAccounts() {
+  const box = $('#accList'); if (!box) return;
+  let list;
+  try { list = await api('/api/accounts'); } catch { return; }
+  if (!$('#accList') || !Array.isArray(list)) return;
+  const date = s => s ? new Date(s * 1000).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+  box.innerHTML = list.map(a => `<div class="acc-row ${a.valid ? '' : 'bad'}">
+    <div class="acc-main"><div><b>${esc(a.username)}</b>${a.primary ? '<span class="acc-tag">Primair</span>' : ''}</div>
+      <small>${a.valid ? `Geldig tot ${esc(date(a.exp))} · ${a.active ? `${a.active} van ${a.max} kijkt` : `${a.max} schermen, niemand kijkt`}` : esc(a.status === 'Expired' ? 'Verlopen op ' + date(a.exp) : a.status || 'Werkt niet')}</small></div>
+    ${list.length > 1 && !a.primary ? `<button class="link" data-acc-primary="${a.i}">Maak primair</button>` : ''}
+    ${list.length > 1 ? `<button class="link danger" data-acc-del="${a.i}">Weghalen</button>` : ''}
+  </div>`).join('');
+  $$('[data-acc-primary]', box).forEach(b => b.onclick = async () => {
+    try { await api(`/api/accounts/${b.dataset.accPrimary}/primary`, { method: 'POST' }); toast('Primair account gewijzigd'); renderAccounts(); } catch (e) { toast(e.message); }
+  });
+  $$('[data-acc-del]', box).forEach(b => b.onclick = async () => {
+    const a = list.find(x => String(x.i) === b.dataset.accDel);
+    if (!confirm(`Account ${a?.username || ''} weghalen uit de app?`)) return;
+    try { await api(`/api/accounts/${b.dataset.accDel}`, { method: 'DELETE' }); toast('Account weggehaald'); renderAccounts(); updateConns(); } catch (e) { toast(e.message); }
+  });
+}
 
 // ================= Licht / donker =================
 const lightQuery = matchMedia('(prefers-color-scheme: light)');

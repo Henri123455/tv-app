@@ -34,9 +34,10 @@ const idb = (() => {
 
 let cfg = readJSON('config', null);
 let account = null;
+const saveCfg = () => writeJSON('config', cfg);
 const base = () => cfg.server.replace(/\/+$/, '');
 const creds = () => `${encodeURIComponent(cfg.username)}/${encodeURIComponent(cfg.password)}`;
-function apiURL(params, c = cfg) {
+function apiURL(params, c = catalogAcc()) {
   const u = new URL(c.server.replace(/\/+$/, '') + '/player_api.php');
   u.searchParams.set('username', c.username);
   u.searchParams.set('password', c.password);
@@ -824,6 +825,121 @@ function memo(src, key, fn) {
 
 function decodeB64(s) { try { return Buffer.from(s || '', 'base64').toString('utf8'); } catch { return ''; } }
 
+// ---------- Twee (of meer) accounts: voelt als één, kiest per keer afspelen het account waar niemand op kijkt ----------
+// cfg.accounts = alle accounts van dezelfde aanbieder, cfg.primary = waar hij bij voorkeur op zit.
+// Lijsten (zenders/films/series) komen van het primaire account, of van het eerste dat nog geldig is.
+// Mijn lijst en verder kijken horen bij je profiel, niet bij een account: dat geldt dus voor allebei.
+const accList = () => !cfg ? [] : (Array.isArray(cfg.accounts) && cfg.accounts.length ? cfg.accounts : [{ server: cfg.server, username: cfg.username, password: cfg.password }]);
+const accId = a => a ? a.username + '@' + String(a.server).replace(/\/+$/, '') : '';
+const accBase = a => a.server.replace(/\/+$/, '');
+const accCreds = a => `${encodeURIComponent(a.username)}/${encodeURIComponent(a.password)}`;
+const hostOf = s => { try { return new URL(s).host; } catch { return String(s || ''); } };
+const accErr = (status, msg) => Object.assign(new Error(msg), { status });
+const accInfos = new Map();
+const accBusy = new Map(); // account → tot wanneer overslaan (de aanbieder zei net "vol" of gaf geen beeld)
+function accInfo(a, maxAge = 2500) {
+  const k = accId(a), hit = accInfos.get(k);
+  if (hit && Date.now() - hit.t < maxAge) return hit.p;
+  const e = { t: Date.now(), last: hit?.last || null };
+  e.p = fetch(apiURL({}, a), { signal: AbortSignal.timeout(5000) }).then(r => r.json()).then(j => { const u = j?.user_info || null; if (u) e.last = u; return u; }).catch(() => e.last);
+  accInfos.set(k, e);
+  return e.p;
+}
+const accValid = u => !!u && Number(u.auth) === 1 && !/expired|banned|disabled/i.test(u.status || '') && !(Number(u.exp_date) > 0 && Number(u.exp_date) * 1000 < Date.now());
+const primaryIdx = () => Math.min(Math.max(0, Number(cfg?.primary) || 0), Math.max(0, accList().length - 1));
+function accOrder() { const l = accList(), p = primaryIdx(); return l.length ? [l[p], ...l.filter((_, i) => i !== p)] : []; }
+var catalogPick = null;
+function catalogAcc() { return (catalogPick && accList().some(a => accId(a) === accId(catalogPick)) ? catalogPick : accOrder()[0]) || cfg; }
+async function refreshCatalog() {
+  const order = accOrder();
+  if (order.length < 2) { catalogPick = null; return; }
+  const infos = await Promise.all(order.map(a => accInfo(a, 60000)));
+  catalogPick = order[Math.max(0, infos.findIndex(accValid))];
+}
+// Welk account nu? Primair als daar niemand op kijkt; kijkt daar iemand, dan het account waar niemand op kijkt;
+// anders het account met de meeste plek. Verlopen accounts en accounts die net "vol" zeiden worden overgeslagen.
+async function pickAccount(avoid) {
+  const order = accOrder();
+  if (order.length < 2) return order[0];
+  const infos = await Promise.all(order.map(a => accInfo(a)));
+  const c = order.map((a, i) => ({ a, u: infos[i], free: infos[i] ? (Number(infos[i].max_connections) || 1) - (Number(infos[i].active_cons) || 0) : 0 }))
+    .filter(x => accValid(x.u) && accId(x.a) !== accId(avoid) && !((accBusy.get(accId(x.a)) || 0) > Date.now()));
+  const pick = c.find(x => (Number(x.u.active_cons) || 0) === 0) || c.filter(x => x.free > 0).sort((x, y) => y.free - x.free)[0] || c[0];
+  return pick ? pick.a : (order.find(a => accId(a) !== accId(avoid)) || order[0]);
+}
+const markBusy = (a, ms = 20000) => { if (a && accList().length > 1) accBusy.set(accId(a), Date.now() + ms); };
+// Adres bij de aanbieder voor "live/123.ts", "movie/55.mkv", "timeshift/90/2026-11-25:20-00/123.m3u8".
+// sticky: zo lang (ms, verlengd bij elk gebruik) blijft hetzelfde ding op hetzelfde account. Een film moet op één
+// account blijven (elk nieuw account = een extra scherm bij de aanbieder).
+const accSticky = new Map();
+async function streamURL(p, { sticky = 0, avoid = null } = {}) {
+  const i = p.indexOf('/'), kind = p.slice(0, i), rest = p.slice(i + 1);
+  let s = accSticky.get(p);
+  if (!s || !sticky || Date.now() - s.t > sticky || avoid) {
+    s = { t: Date.now(), p: pickAccount(avoid) };
+    accSticky.set(p, s);
+    if (accSticky.size > 300) for (const [k, v] of accSticky) if (Date.now() - v.t > 3600e3) accSticky.delete(k);
+  }
+  s.t = Date.now();
+  const a = await s.p;
+  return { url: `${accBase(a)}/${kind}/${accCreds(a)}/${rest}`, acc: a };
+}
+const STICKY_VOD = 3 * 3600e3, STICKY_LIVE = 30000;
+async function accountsView() {
+  const l = accList(), p = primaryIdx();
+  const infos = await Promise.all(l.map(a => accInfo(a)));
+  return l.map((a, i) => {
+    const u = infos[i] || {};
+    return { i, username: a.username, host: hostOf(a.server), primary: i === p, valid: accValid(infos[i]), status: infos[i] ? (u.status || '') : 'Niet bereikbaar',
+      exp: Number(u.exp_date) || 0, active: Number(u.active_cons) || 0, max: Number(u.max_connections) || 0 };
+  });
+}
+async function connTotals() {
+  const v = await accountsView();
+  if (v.every(x => x.status === 'Niet bereikbaar')) return { active: -1, max: 0 };
+  const use = v.filter(x => x.valid).length ? v.filter(x => x.valid) : v.filter(x => x.primary);
+  return { active: use.reduce((n, x) => n + x.active, 0), max: use.reduce((n, x) => n + x.max, 0), accounts: v.length };
+}
+async function addAccount(b) {
+  const c = { server: String(b.server || '').trim() || catalogAcc().server, username: String(b.username || '').trim(), password: String(b.password || '').trim() };
+  if (!/^https?:\/\//.test(c.server)) c.server = 'http://' + c.server;
+  if (!c.username || !c.password) throw accErr(400, 'Vul een gebruikersnaam en wachtwoord in');
+  if (accList().some(a => a.username === c.username && hostOf(a.server) === hostOf(c.server))) throw accErr(400, 'Dit account staat er al in');
+  let info;
+  // (Bij een verkeerde inlog geeft deze aanbieder soms gewoon geen antwoord)
+  try { info = await (await fetch(apiURL({}, c), { signal: AbortSignal.timeout(15000) })).json(); } catch { throw accErr(502, 'Geen antwoord van de server. Klopt de gebruikersnaam en het wachtwoord?'); }
+  if (Number(info?.user_info?.auth) !== 1) throw accErr(401, 'Gebruikersnaam of wachtwoord klopt niet');
+  // Zelfde aanbieder? Dan zijn de zenders en films hetzelfde genummerd (anders kan wisselen niet)
+  const cats = async a => { try { const j = await (await fetch(apiURL({ action: 'get_live_categories' }, a), { signal: AbortSignal.timeout(20000) })).json(); return new Set((Array.isArray(j) ? j : []).map(x => String(x.category_id))); } catch { return new Set(); } };
+  const [x, y] = await Promise.all([cats(catalogAcc()), cats(c)]);
+  if (x.size > 5 && y.size > 5) {
+    let same = 0; for (const id of y) if (x.has(id)) same++;
+    if (same / Math.min(x.size, y.size) < 0.6) throw accErr(400, 'Dit account is van een andere aanbieder. Twee accounts werken alleen samen als ze van dezelfde aanbieder zijn.');
+  }
+  cfg.accounts = [...accList(), c];
+  accInfos.set(accId(c), { t: Date.now(), p: Promise.resolve(info.user_info), last: info.user_info });
+  saveCfg(); refreshCatalog().catch(() => {});
+  return { ok: true };
+}
+function setPrimary(i) {
+  if (!(i >= 0 && i < accList().length)) throw accErr(400, 'Onbekend account');
+  cfg.accounts = accList(); cfg.primary = i; accSticky.clear();
+  saveCfg(); refreshCatalog().catch(() => {});
+  return { ok: true };
+}
+function removeAccount(i) {
+  const l = accList();
+  if (!(i >= 0 && i < l.length)) throw accErr(400, 'Onbekend account');
+  if (l.length < 2) throw accErr(400, 'Je laatste account kun je niet weghalen (gebruik Uitloggen)');
+  const p = primaryIdx();
+  cfg.accounts = l.filter((_, j) => j !== i);
+  cfg.primary = i === p ? 0 : p > i ? p - 1 : p;
+  // Het account waarmee je ooit inlogde weg? Dan wordt het volgende de basis
+  if (!cfg.accounts.some(a => a.username === cfg.username && hostOf(a.server) === hostOf(cfg.server))) Object.assign(cfg, { server: cfg.accounts[0].server, username: cfg.accounts[0].username, password: cfg.accounts[0].password });
+  accSticky.clear(); saveCfg(); refreshCatalog().catch(() => {});
+  return { ok: true };
+}
+
 
 // ===================== Alleen in de app =====================
 
@@ -895,6 +1011,7 @@ const searchCache = new Map();
 // Alles alvast klaarzetten na het openen, zodat wisselen naar Films/Series/Zoeken meteen gaat
 function warmUp() {
   if (!cfg) return;
+  refreshCatalog().catch(() => {});
   loadNetflixNL();
   // Elke stap pas als je even niet tikt of scrolt: zo reageert de app altijd meteen op je vinger
   // (dit rekenwerk deelt de telefoon met het scherm). Trage telefoons wachten wat langer.
@@ -924,7 +1041,17 @@ async function route(url, init) {
   if (p === '/api/session') {
     if (!cfg) return { loggedIn: false, app: true };
     if (!account) { try { account = await (await realFetch(apiURL({}), { signal: AbortSignal.timeout(15000) })).json(); } catch {} }
-    return { loggedIn: true, app: true, server: cfg.server, username: cfg.username, user: account?.user_info || null, ffmpeg: false, lan: null };
+    return { loggedIn: true, app: true, server: cfg.server, username: catalogAcc().username, user: account?.user_info || null, ffmpeg: false, lan: null, accounts: accList().length };
+  }
+  // Accounts (zelfde als op de pc): bekijken, toevoegen, primair maken, weghalen
+  if (p === '/api/accounts' && cfg) {
+    if (method === 'POST') { const r = await addAccount(body()); account = null; return r; }
+    return accountsView();
+  }
+  if ((m = p.match(/^\/api\/accounts\/(\d+)(\/primary)?$/)) && cfg) {
+    const i = Number(m[1]);
+    if (m[2] && method === 'POST') { const r = setPrimary(i); account = null; return r; }
+    if (!m[2] && method === 'DELETE') { const r = removeAccount(i); account = null; return r; }
   }
   if (p === '/api/login' && method === 'POST') {
     const b = body();
@@ -934,7 +1061,7 @@ async function route(url, init) {
     try { info = await (await realFetch(apiURL({}, c), { signal: AbortSignal.timeout(15000) })).json(); }
     catch (e) { throw new HttpError(502, 'Server niet bereikbaar (' + (e && e.message || e) + ')'); }
     if (Number(info?.user_info?.auth) !== 1) throw new HttpError(401, 'Gebruikersnaam of wachtwoord klopt niet');
-    cfg = c; account = info; cache.clear(); writeJSON('config', cfg);
+    cfg = c; account = info; cache.clear(); accSticky.clear(); catalogPick = null; writeJSON('config', cfg);
     warmUp();
     return { ok: true };
   }
@@ -1040,12 +1167,7 @@ async function route(url, init) {
   if (p === '/api/vodinfo') return cached('vi:' + q.id, () => api({ action: 'get_vod_info', vod_id: q.id }), true, 7 * 864e5);
   if (p === '/api/seriesinfo') return cached('si:' + q.id, () => api({ action: 'get_series_info', series_id: q.id }), true, 864e5);
   if (p === '/api/sport') return sportToday();
-  if (p === '/api/conns') {
-    try {
-      const u = (await (await realFetch(apiURL({}), { signal: AbortSignal.timeout(5000) })).json()).user_info || {};
-      return { active: Number(u.active_cons) || 0, max: Number(u.max_connections) || 0 };
-    } catch { return { active: -1, max: 0 }; }
-  }
+  if (p === '/api/conns') return connTotals().catch(() => ({ active: -1, max: 0 }));
   if (p === '/api/subs') return subtitleList(q.type === 'series' ? 'series' : 'movie', q.name || '', q.year, q.tmdb, q.s, q.e).catch(() => []);
   if (p === '/api/epgnow') return epgNow(String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)));
   if (p === '/api/extra') return titleExtra(q.type === 'series' ? 'series' : 'vod', q.name || '').catch(() => ({ imdb: 0, similar: [] }));
@@ -1068,7 +1190,23 @@ window.fetch = async (input, init = {}) => {
   }
 };
 
-// Voor de speler: rechtstreekse adressen bij de aanbieder
-window.TVBackend = { direct: () => cfg ? { base: base(), creds: creds() } : null };
+// Voor de speler: rechtstreekse adressen bij de aanbieder.
+// pick("live/123.ts") kiest het account (primair, of het andere als daar al iemand kijkt); failed(url) = dit account
+// gaf geen beeld (vol): de volgende keer meteen het andere.
+const urlAcc = new Map();
+window.TVBackend = {
+  direct: () => cfg ? { base: accBase(catalogAcc()), creds: accCreds(catalogAcc()) } : null,
+  pick: async (p, vod) => { const r = await streamURL(p, { sticky: vod ? STICKY_VOD : STICKY_LIVE }); urlAcc.set(r.url, r.acc); return r.url; },
+  failed: async (url, p, vod) => {
+    const a = urlAcc.get(url); if (!a || accList().length < 2) return null;
+    // Alleen wisselen als dat account echt vol zat; anders is de bron zelf kapot en is de volgende bron sneller
+    const u = await accInfo(a, 0);
+    if (u && accValid(u) && (Number(u.active_cons) || 0) < (Number(u.max_connections) || 1)) return null;
+    markBusy(a);
+    const r = await streamURL(p, { sticky: vod ? STICKY_VOD : STICKY_LIVE, avoid: a }); urlAcc.set(r.url, r.acc);
+    return r.url !== url ? r.url : null;
+  },
+  accounts: () => accList().length,
+};
 warmUp();
 })();
