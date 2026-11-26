@@ -128,6 +128,14 @@ playLive = function (item, ctx) {
         VLC.switchTo({ url: next, title: tidyName(item.n) }).catch(() => {});
       },
       exit: async (pos, dur, user) => {
+        // Liep hij al en viel hij weg? Kijkt iemand anders nu op dit account, dan meteen verder op het andere
+        if (!user && pos >= 0.5 && run === playRun) {
+          const r = await window.TVBackend.moved(url, `live/${item.id}.ts`, false);
+          if (run !== playRun) return;
+          if (r === 'full') { toast('Iemand anders kijkt nu op dit account, en het andere account is ook bezet'); return; }
+          if (r) { toast('Verder op je andere account'); return startLive(i, r, true); }
+          return;
+        }
         if (user || pos >= 0.5 || Date.now() - t0 >= 40000 || run !== playRun) { window.TVBackend.release(url, false); return; }
         // Was dit account vol (iemand anders keek)? Dan eerst dezelfde zender via het andere account
         if (otherAcc) window.TVBackend.release(url, false);
@@ -211,7 +219,16 @@ playVod = function (o) {
     play({
       url, title: o.title, sub: o.sub || '', start: o.start || 0, duration: o.duration || 0, run,
       series: o.kind === 'series', nextTitle: o.next ? (o.nextLabel || 'volgende') : '', castFirst,
-      exit: (pos, dur, user) => {
+      exit: async (pos, dur, user) => {
+        // Halverwege weggegooid omdat iemand anders op dit account ging kijken? Verder op het andere account, zelfde plek
+        if (!user && played && pos > 5 && !s.url && (!dur || pos < dur - 60) && run === playRun) {
+          if (o.hist) saveHist({ ...o.hist, pos, dur: dur || lastDur });
+          const r = await window.TVBackend.moved(picked, path, true);
+          if (run !== playRun) return;
+          if (r === 'full') { toast('Iemand anders kijkt nu op dit account, en het andere account is ook bezet'); return; }
+          if (r) { toast('Verder op je andere account'); o.start = pos; sources.splice(i + 1, 0, { ...s, url: r, otherAcc: true, forced: true }); return tryIdx(i + 1); }
+          return;
+        }
         if (!user && pos < 0.5 && Date.now() - t0 < 45000 && !played) {
           // Account vol? Dan dezelfde versie via het andere account, anders meteen de volgende versie
           if (!s.url && !s.otherAcc) return window.TVBackend.failed(picked, path, true).then(alt => {

@@ -280,6 +280,17 @@ window.TVBackend = {
     const next = await pickURL(p, vod, a);
     return next && next !== url ? next : null;
   },
+  // Viel een lopende stream weg? Deze aanbieder gooit de oudste kijker eruit als iemand anders (bijv. UHF) op
+  // hetzelfde account gaat kijken. Dan niet terugpakken (dan gooien jullie elkaar om de beurt eruit = blokkade),
+  // maar verder op het andere account. Geeft: nieuw adres, 'full' (alles bezet) of null (niet weggegooid).
+  moved: async (url, p, vod) => {
+    const a = urlAcc.get(url); releaseURL(url, 0);
+    if (!a) return null;
+    const u = await accInfo(a, 0);
+    if (!(u && (Number(u.active_cons) || 0) >= (Number(u.max_connections) || 1))) return null;
+    markBusy(a, 60000);
+    return (await pickURL(p, vod, a)) || 'full';
+  },
   accounts: () => accList().length,
 };
 warmUp();
