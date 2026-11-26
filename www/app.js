@@ -2509,6 +2509,10 @@ function showConns(active, max) {
 }
 async function updateConns() {
   if (connBusy || !$('#connPill') || !S.session || (document.hidden && !connPlaying)) return;
+  // Lukt het niet (account verlopen, aanbieder onbereikbaar)? Dan maar eens per minuut vragen: aanbieders blokkeren
+  // je internetadres als er steeds vergeefse vragen binnenkomen
+  if (connFails >= 3 && Date.now() - (updateConns.at || 0) < 60000) return;
+  updateConns.at = Date.now();
   connBusy = true;
   try {
     const r = await fetch('/api/conns', { signal: AbortSignal.timeout(6000) });

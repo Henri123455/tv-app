@@ -253,17 +253,32 @@ window.fetch = async (input, init = {}) => {
 // pick("live/123.ts") kiest het account (primair, of het andere als daar al iemand kijkt); failed(url) = dit account
 // gaf geen beeld (vol): de volgende keer meteen het andere.
 const urlAcc = new Map();
+// Elke verbinding van de speler wordt bijgehouden (zoals op de pc): nooit meer schermen per account openen dan mag.
+// Deze aanbieder blokkeert je internetadres als er veel "vol"-weigeringen binnenkomen.
+const urlHold = new Map();
+async function pickURL(p, vod, avoid) {
+  const r = await streamURL(p, { sticky: vod ? STICKY_VOD : STICKY_LIVE, avoid });
+  if (r.full) return null; // alles bezet: niet proberen
+  if (r.fresh) await connGate().catch(() => {});
+  urlAcc.set(r.url, r.acc);
+  if (!urlHold.has(r.url)) urlHold.set(r.url, holdConn(r.acc, 0));
+  return r.url;
+}
+function releaseURL(url, ms) { const h = urlHold.get(url); if (!h) return; urlHold.delete(url); setTimeout(h, ms == null ? 4000 : ms); }
 window.TVBackend = {
   direct: () => cfg ? { base: accBase(catalogAcc()), creds: accCreds(catalogAcc()) } : null,
-  pick: async (p, vod) => { const r = await streamURL(p, { sticky: vod ? STICKY_VOD : STICKY_LIVE }); urlAcc.set(r.url, r.acc); return r.url; },
+  pick: (p, vod) => pickURL(p, vod),
+  // Speler gestopt: dit scherm komt vrij zodra de aanbieder het loslaat (live ~4 s, film ~5 min)
+  release: (url, vod) => releaseURL(url, vod ? 5 * 60e3 : 4000),
+  // Kreeg dit adres geen beeld? Als het account vol zat: één keer het andere account, alleen als dat vrij is
   failed: async (url, p, vod) => {
-    const a = urlAcc.get(url); if (!a || accList().length < 2) return null;
-    // Alleen wisselen als dat account echt vol zat; anders is de bron zelf kapot en is de volgende bron sneller
+    const a = urlAcc.get(url); releaseURL(url, vod ? 5 * 60e3 : 4000);
+    if (!a || accList().length < 2) return null;
     const u = await accInfo(a, 0);
     if (u && accValid(u) && (Number(u.active_cons) || 0) < (Number(u.max_connections) || 1)) return null;
     markBusy(a);
-    const r = await streamURL(p, { sticky: vod ? STICKY_VOD : STICKY_LIVE, avoid: a }); urlAcc.set(r.url, r.acc);
-    return r.url !== url ? r.url : null;
+    const next = await pickURL(p, vod, a);
+    return next && next !== url ? next : null;
   },
   accounts: () => accList().length,
 };

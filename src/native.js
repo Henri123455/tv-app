@@ -104,6 +104,7 @@ playLive = function (item, ctx) {
     if (i > 0) toast('Andere bron geprobeerd');
     const url = await src('live', sources[i], 'ts');
     if (run !== playRun) return;
+    if (!url) { toast('Alle schermen zijn bezet. Stop eerst op een ander apparaat.'); return; }
     startLive(i, url, false);
   };
   const startLive = (i, url, otherAcc) => {
@@ -119,13 +120,19 @@ playLive = function (item, ctx) {
         const k2 = favKey('live', item.id);
         items.set(k2, { ...item, type: 'live' });
         saveHist({ k: k2, type: 'live', id: item.id, n: item.n, i: item.i, alt: item.alt });
-        VLC.switchTo({ url: await src('live', item.id, 'ts'), title: tidyName(item.n) }).catch(() => {});
+        const old = url;
+        window.TVBackend.release(old, false);
+        const next = await src('live', item.id, 'ts');
+        if (!next) { toast('Alle schermen zijn bezet'); return; }
+        url = next;
+        VLC.switchTo({ url: next, title: tidyName(item.n) }).catch(() => {});
       },
       exit: async (pos, dur, user) => {
-        if (user || pos >= 0.5 || Date.now() - t0 >= 40000 || run !== playRun) return;
+        if (user || pos >= 0.5 || Date.now() - t0 >= 40000 || run !== playRun) { window.TVBackend.release(url, false); return; }
         // Was dit account vol (iemand anders keek)? Dan eerst dezelfde zender via het andere account
+        if (otherAcc) window.TVBackend.release(url, false);
         const alt = otherAcc ? null : await window.TVBackend.failed(url, `live/${sources[i]}.ts`, false);
-        if (run !== playRun) return;
+        if (run !== playRun) { if (alt) window.TVBackend.release(alt, false); return; }
         if (alt) return startLive(i, alt, true);
         if (i + 1 < sources.length) tryIdx(i + 1);
       },
@@ -188,6 +195,7 @@ playVod = function (o) {
       toast('Deze film/aflevering werkt nu niet. Probeer het later opnieuw.'); return;
     }
     let url = s.url || await src(o.kind, s.id, s.e);
+    if (!url) { toast('Alle schermen zijn bezet. Stop eerst op een ander apparaat.'); return; }
     const picked = url, path = `${o.kind}/${s.id}.${s.e}`;
     if (!s.url && !s.forced && !(await alive(url))) {
       // Werkt niet: was dit account vol? Dan dezelfde versie via het andere account
@@ -213,12 +221,13 @@ playVod = function (o) {
           });
           return tryIdx(i + 1);
         }
+        window.TVBackend.release(picked, true);
         if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || o.duration || 0 });
       },
       // Tussendoor bewaren (elke 10 s): ook als de app wordt afgesloten of de telefoon uitvalt, weet hij waar je was
       progress: (pos, dur) => { played = true; if (dur > 0) lastDur = dur; if (o.hist && pos > 5) saveHist({ ...o.hist, pos, dur: dur || lastDur }); },
       // Afgelopen: als "helemaal gezien" bewaren (ook als de lengte onbekend was), zodat verder kijken de volgende aflevering neemt
-      ended: () => { if (o.hist) { const d = lastDur || 1; saveHist({ ...o.hist, pos: d, dur: d }); } if (o.next) setTimeout(o.next, 600); },
+      ended: () => { window.TVBackend.release(picked, true); if (o.hist) { const d = lastDur || 1; saveHist({ ...o.hist, pos: d, dur: d }); } if (o.next) setTimeout(o.next, 600); },
     }, true);
   };
   tryIdx(0);

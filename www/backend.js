@@ -839,9 +839,11 @@ const accInfos = new Map();
 const accBusy = new Map(); // account → tot wanneer overslaan (de aanbieder zei net "vol" of gaf geen beeld)
 function accInfo(a, maxAge = 2500) {
   const k = accId(a), hit = accInfos.get(k);
+  // Verlopen of onbereikbaar account: maar eens per 5 minuten opnieuw vragen (anders blokkeert de aanbieder je adres)
+  if (hit && maxAge > 0 && (!hit.last || !accValid(hit.last)) && hit.done) maxAge = Math.max(maxAge, 300000);
   if (hit && Date.now() - hit.t < maxAge) return hit.p;
   const e = { t: Date.now(), last: hit?.last || null };
-  e.p = fetch(apiURL({}, a), { signal: AbortSignal.timeout(5000) }).then(r => r.json()).then(j => { const u = j?.user_info || null; if (u) e.last = u; return u; }).catch(() => e.last);
+  e.p = fetch(apiURL({}, a), { signal: AbortSignal.timeout(5000) }).then(r => r.json()).then(j => { const u = j?.user_info || null; if (u) e.last = u; return u; }).catch(() => e.last).finally(() => { e.done = true; });
   accInfos.set(k, e);
   return e.p;
 }
@@ -858,33 +860,65 @@ async function refreshCatalog() {
 }
 // Welk account nu? Primair als daar niemand op kijkt; kijkt daar iemand, dan het account waar niemand op kijkt;
 // anders het account met de meeste plek. Verlopen accounts en accounts die net "vol" zeiden worden overgeslagen.
+// BELANGRIJK (gemeten 2026-11-26): deze aanbieder blokkeert je hele internetadres een paar uur als er kort na elkaar
+// veel geweigerde verzoeken binnenkomen (meer schermen dan het account mag = "509", of een verlopen account).
+// En hij telt een nieuwe verbinding pas na een paar seconden mee. Daarom houdt de app zelf bij hoeveel verbindingen
+// hij per account open heeft (en nog even daarna, zolang de aanbieder ze vasthoudt) en opent hij er nooit meer dan mag.
+const accOpen = new Map(); // account → aantal eigen verbindingen (open, of net dicht maar nog vastgehouden)
+function holdConn(a, holdMs = 4000) {
+  if (!a) return () => {};
+  const k = accId(a); accOpen.set(k, (accOpen.get(k) || 0) + 1);
+  let done = false;
+  return () => { if (done) return; done = true; setTimeout(() => accOpen.set(k, Math.max(0, (accOpen.get(k) || 1) - 1)), holdMs); };
+}
+const ownOpen = a => accOpen.get(accId(a)) || 0;
+// Nieuwe verbindingen rustig openen: minstens 1,2 s ertussen en hooguit 20 per minuut (anders ziet het eruit als een aanval)
+const gate = { last: 0, times: [] };
+async function connGate() {
+  const now = Date.now();
+  gate.times = gate.times.filter(t => now - t < 60000);
+  if (gate.times.length >= 20) throw accErr(503, 'Even rustig aan');
+  const wait = Math.max(0, gate.last + 1200 - now);
+  gate.last = now + wait; gate.times.push(now + wait);
+  if (wait) await new Promise(r => setTimeout(r, wait));
+}
+// Welk account nu? Primair als daar niemand op kijkt; kijkt daar iemand, dan het account waar niemand op kijkt;
+// anders het account met de meeste plek. Verlopen accounts en accounts die net "vol" zeiden worden overgeslagen.
+// full = alles bezet: dan NIET bij de aanbieder proberen (dat levert alleen een "509" op en telt mee voor een blokkade).
 async function pickAccount(avoid) {
   const order = accOrder();
-  if (order.length < 2) return order[0];
   const infos = await Promise.all(order.map(a => accInfo(a)));
-  const c = order.map((a, i) => ({ a, u: infos[i], free: infos[i] ? (Number(infos[i].max_connections) || 1) - (Number(infos[i].active_cons) || 0) : 0 }))
-    .filter(x => accValid(x.u) && accId(x.a) !== accId(avoid) && !((accBusy.get(accId(x.a)) || 0) > Date.now()));
-  const pick = c.find(x => (Number(x.u.active_cons) || 0) === 0) || c.filter(x => x.free > 0).sort((x, y) => y.free - x.free)[0] || c[0];
-  return pick ? pick.a : (order.find(a => accId(a) !== accId(avoid)) || order[0]);
+  const c = order.map((a, i) => {
+    const u = infos[i], max = Number(u?.max_connections) || 1, used = Math.max(Number(u?.active_cons) || 0, ownOpen(a));
+    return { a, u, used, free: max - used };
+  }).filter(x => (order.length < 2 || accValid(x.u)) && accId(x.a) !== accId(avoid) && !((accBusy.get(accId(x.a)) || 0) > Date.now()));
+  const pick = c.find(x => x.used === 0) || c.filter(x => x.free > 0).sort((x, y) => y.free - x.free)[0];
+  if (pick) return { a: pick.a, full: false };
+  return { a: (c[0] || {}).a || order.find(a => accId(a) !== accId(avoid)) || order[0], full: true };
 }
-const markBusy = (a, ms = 20000) => { if (a && accList().length > 1) accBusy.set(accId(a), Date.now() + ms); };
+const markBusy = (a, ms = 60000) => { if (a) accBusy.set(accId(a), Date.now() + ms); };
 // Adres bij de aanbieder voor "live/123.ts", "movie/55.mkv", "timeshift/90/2026-11-25:20-00/123.m3u8".
 // sticky: zo lang (ms, verlengd bij elk gebruik) blijft hetzelfde ding op hetzelfde account. Een film moet op één
 // account blijven (elk nieuw account = een extra scherm bij de aanbieder).
 const accSticky = new Map();
 async function streamURL(p, { sticky = 0, avoid = null } = {}) {
   const i = p.indexOf('/'), kind = p.slice(0, i), rest = p.slice(i + 1);
-  let s = accSticky.get(p);
+  let s = accSticky.get(p), fresh = false;
   if (!s || !sticky || Date.now() - s.t > sticky || avoid) {
     s = { t: Date.now(), p: pickAccount(avoid) };
-    accSticky.set(p, s);
+    accSticky.set(p, s); fresh = true;
     if (accSticky.size > 300) for (const [k, v] of accSticky) if (Date.now() - v.t > 3600e3) accSticky.delete(k);
   }
   s.t = Date.now();
-  const a = await s.p;
-  return { url: `${accBase(a)}/${kind}/${accCreds(a)}/${rest}`, acc: a };
+  const r = await s.p, a = r.a;
+  // Niets vrij: deze keuze niet onthouden, de volgende keer opnieuw kijken. (Iets dat al op een account loopt, zoals
+  // de volgende stukjes van een film, is nooit "vol": dat is je eigen scherm.)
+  if (r.full && fresh && accSticky.get(p) === s) accSticky.delete(p);
+  return { url: `${accBase(a)}/${kind}/${accCreds(a)}/${rest}`, acc: a, full: r.full && fresh, fresh };
 }
-const STICKY_VOD = 3 * 3600e3, STICKY_LIVE = 30000;
+// Live nooit "vastplakken" aan een account: een net gesloten zender houdt de aanbieder nog ~3 s vast, dus elke keer
+// opnieuw kiezen (met de eigen telling erbij). Films wel: die moeten op één account blijven.
+const STICKY_VOD = 3 * 3600e3, STICKY_LIVE = 0;
 async function accountsView() {
   const l = accList(), p = primaryIdx();
   const infos = await Promise.all(l.map(a => accInfo(a)));
@@ -896,7 +930,7 @@ async function accountsView() {
 }
 async function connTotals() {
   const v = await accountsView();
-  if (v.every(x => x.status === 'Niet bereikbaar')) return { active: -1, max: 0 };
+  if (v.every(x => x.status === 'Niet bereikbaar') || !v.some(x => x.valid)) return { active: -1, max: 0 };
   const use = v.filter(x => x.valid).length ? v.filter(x => x.valid) : v.filter(x => x.primary);
   return { active: use.reduce((n, x) => n + x.active, 0), max: use.reduce((n, x) => n + x.max, 0), accounts: v.length };
 }
@@ -1205,17 +1239,32 @@ window.fetch = async (input, init = {}) => {
 // pick("live/123.ts") kiest het account (primair, of het andere als daar al iemand kijkt); failed(url) = dit account
 // gaf geen beeld (vol): de volgende keer meteen het andere.
 const urlAcc = new Map();
+// Elke verbinding van de speler wordt bijgehouden (zoals op de pc): nooit meer schermen per account openen dan mag.
+// Deze aanbieder blokkeert je internetadres als er veel "vol"-weigeringen binnenkomen.
+const urlHold = new Map();
+async function pickURL(p, vod, avoid) {
+  const r = await streamURL(p, { sticky: vod ? STICKY_VOD : STICKY_LIVE, avoid });
+  if (r.full) return null; // alles bezet: niet proberen
+  if (r.fresh) await connGate().catch(() => {});
+  urlAcc.set(r.url, r.acc);
+  if (!urlHold.has(r.url)) urlHold.set(r.url, holdConn(r.acc, 0));
+  return r.url;
+}
+function releaseURL(url, ms) { const h = urlHold.get(url); if (!h) return; urlHold.delete(url); setTimeout(h, ms == null ? 4000 : ms); }
 window.TVBackend = {
   direct: () => cfg ? { base: accBase(catalogAcc()), creds: accCreds(catalogAcc()) } : null,
-  pick: async (p, vod) => { const r = await streamURL(p, { sticky: vod ? STICKY_VOD : STICKY_LIVE }); urlAcc.set(r.url, r.acc); return r.url; },
+  pick: (p, vod) => pickURL(p, vod),
+  // Speler gestopt: dit scherm komt vrij zodra de aanbieder het loslaat (live ~4 s, film ~5 min)
+  release: (url, vod) => releaseURL(url, vod ? 5 * 60e3 : 4000),
+  // Kreeg dit adres geen beeld? Als het account vol zat: één keer het andere account, alleen als dat vrij is
   failed: async (url, p, vod) => {
-    const a = urlAcc.get(url); if (!a || accList().length < 2) return null;
-    // Alleen wisselen als dat account echt vol zat; anders is de bron zelf kapot en is de volgende bron sneller
+    const a = urlAcc.get(url); releaseURL(url, vod ? 5 * 60e3 : 4000);
+    if (!a || accList().length < 2) return null;
     const u = await accInfo(a, 0);
     if (u && accValid(u) && (Number(u.active_cons) || 0) < (Number(u.max_connections) || 1)) return null;
     markBusy(a);
-    const r = await streamURL(p, { sticky: vod ? STICKY_VOD : STICKY_LIVE, avoid: a }); urlAcc.set(r.url, r.acc);
-    return r.url !== url ? r.url : null;
+    const next = await pickURL(p, vod, a);
+    return next && next !== url ? next : null;
   },
   accounts: () => accList().length,
 };
