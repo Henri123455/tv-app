@@ -236,15 +236,15 @@ async function route(url, init) {
   if (p === '/api/top') return top10(['live', 'vod', 'series'].includes(q.type) ? q.type : 'live');
   if (p === '/api/archive/channels') return archiveChannels();
   if (p === '/api/archive/day') return archiveDay(q.id, q.date);
-  if (p === '/api/vodinfo') return cached('vi:' + q.id, () => api({ action: 'get_vod_info', vod_id: q.id }), true, 7 * 864e5);
-  if (p === '/api/seriesinfo') return cached('si:' + q.id, () => api({ action: 'get_series_info', series_id: q.id }), true, 864e5);
+  if (p === '/api/vodinfo') return cached('vi:' + q.id, () => api({ action: 'get_vod_info', vod_id: q.id, _bg: 'now' }), true, 7 * 864e5);
+  if (p === '/api/seriesinfo') return cached('si:' + q.id, () => api({ action: 'get_series_info', series_id: q.id, _bg: 'now' }), true, 864e5);
   if (p === '/api/sport') return sportToday();
   if (p === '/api/conns') return connTotals().catch(() => ({ active: -1, max: 0 }));
   if (p === '/api/subs') return subtitleList(q.type === 'series' ? 'series' : 'movie', q.name || '', q.year, q.tmdb, q.s, q.e).catch(() => []);
   if (p === '/api/epgnow') return epgNow(String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)));
   if (p === '/api/extra') return titleExtra(q.type === 'series' ? 'series' : 'vod', q.name || '').catch(() => ({ imdb: 0, similar: [] }));
   if (p === '/api/epg') {
-    const j = await cached('epg:' + q.id, () => api({ action: 'get_short_epg', stream_id: q.id, limit: 3 }), false, 5 * 60e3);
+    const j = await cached('epg:' + q.id, () => api({ action: 'get_short_epg', stream_id: q.id, limit: 3, _bg: 'now' }), false, 5 * 60e3);
     return (j.epg_listings || []).map(e => ({ t: decodeB64(e.title), d: decodeB64(e.description), s: Number(e.start_timestamp), e: Number(e.stop_timestamp) }));
   }
   throw new HttpError(404, 'Onbekend: ' + p);

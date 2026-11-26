@@ -490,12 +490,13 @@ function fillShelf(shelf, type, list, opt = {}) { // list/opt worden bijgewerkt 
 function rowEl(title, { count, onAll } = {}) {
   const el = document.createElement('section');
   el.className = 'row';
-  el.innerHTML = `<div class="row-head">${onAll ? `<button class="row-title">` : '<div class="row-title">'}<h3>${esc(title)}</h3>${onAll ? CHEVRON : ''}${onAll ? '</button>' : '</div>'}${count ? `<span class="count">${count}</span>` : ''}</div>
+  // Kopje links, rechts een nette knop "Alles" (zoals Netflix/Apple TV) in plaats van een pijltje vlak achter de tekst
+  el.innerHTML = `<div class="row-head"><div class="row-title"><h3>${esc(title)}</h3></div>${count ? `<span class="count">${count}</span>` : ''}${onAll ? `<button class="see-all">Alles${CHEVRON}</button>` : ''}</div>
     <div class="row-wrap"><button class="row-arrow l" aria-label="Terug"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><div class="shelf" data-ctx></div><button class="row-arrow r" aria-label="Verder"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button></div>`;
   const shelf = $('.shelf', el);
   $('.row-arrow.l', el).onclick = () => shelf.scrollBy({ left: -shelf.clientWidth * .85, behavior: 'smooth' });
   $('.row-arrow.r', el).onclick = () => shelf.scrollBy({ left: shelf.clientWidth * .85, behavior: 'smooth' });
-  if (onAll) $('.row-title', el).onclick = onAll;
+  if (onAll) { $('.see-all', el).onclick = onAll; $('.row-title', el).onclick = onAll; $('.row-title', el).classList.add('click'); }
   return el;
 }
 const skeletons = (type, n = 8) => Array.from({ length: n }, () => `<div class="card skeleton ${type === 'live' ? 'live' : 'poster'}"><div class="art"></div><div class="name">&nbsp;</div></div>`).join('');
@@ -877,8 +878,7 @@ function renderMine() {
     const l = list.filter(f => f.type === t);
     if (!l.length) continue;
     const max = TUNE.search[t === 'live' ? 0 : 1] * (TOUCH ? 1 : 2);
-    body.insertAdjacentHTML('beforeend', `<h3 class="section-sub">${label}</h3><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx>${l.slice(0, max).map(x => cardHTML(t, x, opt(x))).join('')}</div>` +
-      (l.length > max ? `<button class="show-all" data-all="${t}"><span>Alles laten zien</span><small>${l.length} ${label.toLowerCase()}</small>${CHEVRON}</button>` : ''));
+    body.insertAdjacentHTML('beforeend', `<div class="row-head mine-head"><div class="row-title"><h3>${label}</h3></div>${l.length > max ? `<button class="see-all" data-all="${t}">Alles (${l.length})${CHEVRON}</button>` : ''}</div><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx>${l.slice(0, max).map(x => cardHTML(t, x, opt(x))).join('')}</div>`);
     const g = $$('.grid[data-ctx]', body).pop(); g._list = l; g._type = t;
     const all = $(`[data-all="${t}"]`, body);
     if (all) all.onclick = () => {
@@ -2396,10 +2396,16 @@ async function updateHealth() {
 }
 
 // Lijst met accounts: status, geldig tot, wie er kijkt; primair maken en weghalen
-async function renderAccounts() {
+async function renderAccounts(given) {
   const box = $('#accList'); if (!box) return;
-  let list;
-  try { list = await api('/api/accounts'); } catch { return; }
+  let list = given;
+  if (!list) {
+    // Meteen tonen wat dit apparaat al weet; daarna (snel, zonder de aanbieder te belasten) bijwerken
+    const last = store.get('accs', null);
+    if (Array.isArray(last) && last.length) renderAccounts(last);
+    try { list = await api('/api/accounts'); } catch { return; }
+    if (Array.isArray(list)) store.set('accs', list);
+  }
   if (!$('#accList') || !Array.isArray(list)) return;
   const date = s => s ? new Date(s * 1000).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
   box.innerHTML = list.map(a => `<div class="acc-row ${a.valid ? '' : 'bad'}">

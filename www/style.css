@@ -1075,3 +1075,14 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 html, body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 img { -webkit-user-drag: none; -webkit-touch-callout: none; }
 input, textarea, [contenteditable], code { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+
+/* Rij-kop: titel links, "Alles" rechts als rustig knopje */
+.row-head { align-items: center; }
+.row-title.click { cursor: pointer; }
+.see-all { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; padding: 5px 8px 5px 12px; border-radius: 999px; font: inherit; font-size: 13.5px; font-weight: 600; color: var(--muted); background: rgba(255,255,255,.08); transition: background .2s, color .2s; white-space: nowrap; }
+.see-all .chev { width: 16px; height: 16px; stroke-width: 2.4; }
+.see-all:hover { background: rgba(255,255,255,.16); color: var(--text); }
+[data-theme="light"] .see-all { background: rgba(0,0,0,.05); }
+[data-theme="light"] .see-all:hover { background: rgba(0,0,0,.09); }
+.mine-head { padding: 0; margin: 22px 0 10px; }
+.mine-head h3 { font-size: 20px; }

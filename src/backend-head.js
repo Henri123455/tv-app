@@ -84,9 +84,11 @@ async function api(params) {
   for (let attempt = 0; ; attempt++) {
     // Eerst de rem (rustig aan bij de aanbieder, anders blokkeert hij je adres; _bg = achtergrondwerk, mag wachten),
     // pas daarna een plekje in de rij. Zo staat wat jij aantikt nooit achter achtergrondwerk te wachten.
-    await apiGate(!!params._bg);
+    await apiGate(params._bg === 'now' ? 'now' : !!params._bg);
     try {
-      return await limited(async () => {
+      // Wat jij aantikt hoeft niet te wachten op een vrij plekje (grote lijsten kunnen die lang bezet houden)
+      const run = params._bg === 'now' ? (fn => fn()) : limited;
+      return await run(async () => {
         const r = await realFetch(apiURL(params), { signal: AbortSignal.timeout(!params.category_id && /streams$|^get_series$/.test(params.action || '') ? 120000 : 30000) });
         noteHealth(true);
         if (!r.ok) throw new Error('API ' + r.status);

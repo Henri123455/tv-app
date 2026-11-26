@@ -84,9 +84,11 @@ async function api(params) {
   for (let attempt = 0; ; attempt++) {
     // Eerst de rem (rustig aan bij de aanbieder, anders blokkeert hij je adres; _bg = achtergrondwerk, mag wachten),
     // pas daarna een plekje in de rij. Zo staat wat jij aantikt nooit achter achtergrondwerk te wachten.
-    await apiGate(!!params._bg);
+    await apiGate(params._bg === 'now' ? 'now' : !!params._bg);
     try {
-      return await limited(async () => {
+      // Wat jij aantikt hoeft niet te wachten op een vrij plekje (grote lijsten kunnen die lang bezet houden)
+      const run = params._bg === 'now' ? (fn => fn()) : limited;
+      return await run(async () => {
         const r = await realFetch(apiURL(params), { signal: AbortSignal.timeout(!params.category_id && /streams$|^get_series$/.test(params.action || '') ? 120000 : 30000) });
         noteHealth(true);
         if (!r.ok) throw new Error('API ' + r.status);
@@ -849,7 +851,7 @@ function accInfo(a, maxAge = 30000) {
   if (hit && maxAge > 0 && (!hit.last || !accValid(hit.last)) && hit.done) maxAge = Math.max(maxAge, 300000);
   if (hit && Date.now() - hit.t < maxAge) return hit.p;
   const e = { t: Date.now(), last: hit?.last || null };
-  e.p = apiGate(false).then(() => fetch(apiURL({}, a), { signal: AbortSignal.timeout(5000) })).then(r => { noteHealth(true); return r.json(); }, err => { noteHealth(false); throw err; }).then(j => { const u = j?.user_info || null; if (u) e.last = u; return u; }).catch(() => e.last).finally(() => { e.done = true; });
+  e.p = apiGate('now').then(() => fetch(apiURL({}, a), { signal: AbortSignal.timeout(5000) })).then(r => { noteHealth(true); return r.json(); }, err => { noteHealth(false); throw err; }).then(j => { const u = j?.user_info || null; if (u) e.last = u; return u; }).catch(() => e.last).finally(() => { e.done = true; });
   accInfos.set(k, e);
   return e.p;
 }
@@ -896,11 +898,13 @@ function healthView() {
 // zender, info per film/serie, sportgids) en blokkeerde de aanbieder je adres. Nu: hooguit 1 vraag per seconde,
 // en achtergrondwerk (gids op de kaarten, posters, jaartallen, sport) hooguit 20 per minuut. Wat jij aantikt
 // (een film openen, de gids in de speler) gaat altijd voor.
-const apiQ = { fg: [], bg: [], last: 0, bgTimes: [], timer: null };
-const API_GAP = 1000, BG_PER_MIN = 20;
+// Drie rijen: "nu" (wat jij aantikt: film/serie openen, gids in de speler, schermen) gaat altijd eerst,
+// dan gewone lijsten, dan achtergrondwerk.
+const apiQ = { now: [], fg: [], bg: [], last: 0, bgTimes: [], timer: null };
+const API_GAP = 700, BG_PER_MIN = 30;
 function apiGate(bg) {
   return new Promise((res, rej) => {
-    const q = bg ? apiQ.bg : apiQ.fg;
+    const q = bg === 'now' ? apiQ.now : bg ? apiQ.bg : apiQ.fg;
     q.push({ res, rej });
     // Te veel achtergrondwerk in de rij (snel scrollen)? De oudste vragen laten vallen: die kaarten zijn al uit beeld
     while (apiQ.bg.length > 40) apiQ.bg.shift().rej(new Error('te druk'));
@@ -912,14 +916,14 @@ function pumpApi() {
   const now = Date.now();
   apiQ.bgTimes = apiQ.bgTimes.filter(t => now - t < 60000);
   const canBg = apiQ.bgTimes.length < BG_PER_MIN;
-  if (!apiQ.fg.length && !(canBg && apiQ.bg.length)) {
+  if (!apiQ.now.length && !apiQ.fg.length && !(canBg && apiQ.bg.length)) {
     if (apiQ.bg.length) apiQ.timer = setTimeout(() => { apiQ.timer = null; pumpApi(); }, 60000 - (now - apiQ.bgTimes[0]) + 10);
     return;
   }
   const wait = Math.max(0, apiQ.last + API_GAP - now);
   apiQ.timer = setTimeout(() => {
     apiQ.timer = null; apiQ.last = Date.now();
-    const next = apiQ.fg.shift() || (apiQ.bgTimes.push(Date.now()), apiQ.bg.shift());
+    const next = apiQ.now.shift() || apiQ.fg.shift() || (apiQ.bgTimes.push(Date.now()), apiQ.bg.shift());
     next?.res();
     pumpApi();
   }, wait);
@@ -985,8 +989,13 @@ async function streamURL(p, { sticky = 0, avoid = null } = {}) {
 // opnieuw kiezen (met de eigen telling erbij). Films wel: die moeten op één account blijven.
 const STICKY_VOD = 3 * 3600e3, STICKY_LIVE = 0;
 async function accountsView() {
+  // Meteen antwoorden met wat al bekend is (instellingen openen moet direct gaan, en mag de aanbieder niet belasten).
+  // Alleen het primaire account wordt (op de achtergrond, hooguit eens per minuut) bijgewerkt; het tweede account
+  // alleen als het toch al gebruikt werd.
   const l = accList(), p = primaryIdx();
-  const infos = await Promise.all(l.map((a, i) => accInfo(a, i === p ? 30000 : 10 * 60e3)));
+  const known = a => accInfos.get(accId(a))?.last || null;
+  if (l[p] && !known(l[p])) await accInfo(l[p], 60000).catch(() => null); else if (l[p]) accInfo(l[p], 60000).catch(() => {});
+  const infos = l.map(known);
   return l.map((a, i) => {
     const u = infos[i] || {};
     return { i, name: a.name || '', username: a.username, host: hostOf(a.server), primary: i === p, valid: accValid(infos[i]), status: infos[i] ? (u.status || '') : 'Niet bereikbaar',
@@ -1289,15 +1298,15 @@ async function route(url, init) {
   if (p === '/api/top') return top10(['live', 'vod', 'series'].includes(q.type) ? q.type : 'live');
   if (p === '/api/archive/channels') return archiveChannels();
   if (p === '/api/archive/day') return archiveDay(q.id, q.date);
-  if (p === '/api/vodinfo') return cached('vi:' + q.id, () => api({ action: 'get_vod_info', vod_id: q.id }), true, 7 * 864e5);
-  if (p === '/api/seriesinfo') return cached('si:' + q.id, () => api({ action: 'get_series_info', series_id: q.id }), true, 864e5);
+  if (p === '/api/vodinfo') return cached('vi:' + q.id, () => api({ action: 'get_vod_info', vod_id: q.id, _bg: 'now' }), true, 7 * 864e5);
+  if (p === '/api/seriesinfo') return cached('si:' + q.id, () => api({ action: 'get_series_info', series_id: q.id, _bg: 'now' }), true, 864e5);
   if (p === '/api/sport') return sportToday();
   if (p === '/api/conns') return connTotals().catch(() => ({ active: -1, max: 0 }));
   if (p === '/api/subs') return subtitleList(q.type === 'series' ? 'series' : 'movie', q.name || '', q.year, q.tmdb, q.s, q.e).catch(() => []);
   if (p === '/api/epgnow') return epgNow(String(q.ids || '').split(',').filter(x => /^\d+$/.test(x)));
   if (p === '/api/extra') return titleExtra(q.type === 'series' ? 'series' : 'vod', q.name || '').catch(() => ({ imdb: 0, similar: [] }));
   if (p === '/api/epg') {
-    const j = await cached('epg:' + q.id, () => api({ action: 'get_short_epg', stream_id: q.id, limit: 3 }), false, 5 * 60e3);
+    const j = await cached('epg:' + q.id, () => api({ action: 'get_short_epg', stream_id: q.id, limit: 3, _bg: 'now' }), false, 5 * 60e3);
     return (j.epg_listings || []).map(e => ({ t: decodeB64(e.title), d: decodeB64(e.description), s: Number(e.start_timestamp), e: Number(e.stop_timestamp) }));
   }
   throw new HttpError(404, 'Onbekend: ' + p);
