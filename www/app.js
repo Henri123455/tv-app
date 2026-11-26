@@ -2265,31 +2265,29 @@ $('#accountBtn').onclick = async () => {
           <div class="acc-add-row"><button class="btn primary" type="submit">Toevoegen</button><span class="muted small" id="accAddMsg"></span></div>
         </form>
       </div>
-      <p class="set-foot">De app kijkt op je primaire account. Kijkt daar al iemand, dan gaat hij vanzelf naar het andere. Mijn lijst en verder kijken horen bij je profiel, dus gelden voor allebei.</p>
     </div>
 
     <div class="set-sec"><h3>Weergave</h3>
       <div class="set-card pad"><div class="seg theme-seg">${[['auto', 'Automatisch'], ['light', 'Licht'], ['dark', 'Donker']].map(([k, l]) => `<button data-theme-pick="${k}" class="${store.get('theme', 'auto') === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
-      <p class="set-foot">Automatisch volgt je apparaat. Geldt alleen voor dit apparaat.</p>
     </div>
 
     <div class="set-sec"><h3>Lijsten</h3>
       <div class="set-card">
-        <div class="set-row"><span class="hdot" id="hDot"></span><span class="set-txt"><b>Verbinding met aanbieder</b><small id="hTxt">Controleren…</small></span></div>
-        <div class="set-row"><span class="set-txt"><b>Lijsten verversen</b><small>Nieuwe zenders, films en series ophalen</small></span><button class="btn glass sm" id="reloadAll">Verversen</button></div>
+        <div class="set-row"><span class="hdot" id="hDot"></span><span class="set-txt"><b>Verbinding</b><small id="hTxt">Controleren…</small></span></div>
+        <div class="set-row"><span class="set-txt"><b>Lijsten verversen</b></span><button class="btn glass sm" id="reloadAll">Verversen</button></div>
       </div>
     </div>
 
     ${pc ? `<div class="set-sec"><h3>Meer</h3>
       <div class="set-card">
-        <details class="set-more"><summary class="set-row"><span class="set-txt"><b>Op je telefoon kijken</b><small>Via de wifi van deze pc</small></span><span class="chev"></span></summary>
+        <details class="set-more"><summary class="set-row"><span class="set-txt"><b>Op je telefoon kijken</b></span><span class="chev"></span></summary>
           <div class="set-body">${lan ? `<div class="qr-row"><div class="qr" id="qr"></div><ol>
             <li>Zet je telefoon op dezelfde wifi als deze pc.</li>
             <li>Scan de code met je camera, of open <code>${esc(lan)}</code> in Safari.</li>
             <li>Tik op <b>Deel</b> → <b>Zet op beginscherm</b>.</li></ol></div>` : '<p class="muted">Geen wifi-netwerk gevonden.</p>'}
             <p class="muted small">De pc moet aan staan met de app open. <a class="link" href="/uitleg.html" target="_blank">Uitleg</a></p></div>
         </details>
-        <details class="set-more"><summary class="set-row"><span class="set-txt"><b>Delen met vrienden</b><small>Installatiebestand zonder jouw inlog</small></span><span class="chev"></span></summary>
+        <details class="set-more"><summary class="set-row"><span class="set-txt"><b>Delen met vrienden</b></span><span class="chev"></span></summary>
           <div class="set-body"><p>Dubbelklik in de map van de app op <b>Maak deelbestand.cmd</b>. Je krijgt <b>TV installeren.cmd</b> in je Downloads; stuur dat door. Je vriend logt zelf in.</p></div>
         </details>
       </div>
@@ -2390,8 +2388,8 @@ async function updateHealth() {
   const hm = t => new Date(t).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
   const st = h?.state || 'unknown';
   dot.className = 'hdot ' + st;
-  txt.textContent = st === 'ok' ? 'Verbonden, alles werkt'
-    : st === 'blocked' ? `Geen verbinding sinds ${hm(h.since)}. Meestal een tijdelijke blokkade van je wifi-adres; dit springt vanzelf op groen als het voorbij is (4G werkt wel).`
+  txt.textContent = st === 'ok' ? 'Verbonden'
+    : st === 'blocked' ? `Geblokkeerd sinds ${hm(h.since)} (gaat vanzelf over)`
     : 'Nog niet bekend';
   clearTimeout(updateHealth.t);
   updateHealth.t = setTimeout(updateHealth, st === 'ok' ? 30000 : 15000);
@@ -2406,8 +2404,7 @@ async function renderAccounts() {
   const date = s => s ? new Date(s * 1000).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
   box.innerHTML = list.map(a => `<div class="acc-row ${a.valid ? '' : 'bad'}">
     <div class="acc-main"><div><b>${esc(a.name || a.username)}</b>${a.primary ? '<span class="acc-tag">Primair</span>' : ''}</div>
-      ${a.name ? `<small>${esc(a.username)}</small>` : ''}
-      <small>${a.valid ? `Geldig tot ${esc(date(a.exp))} · ${a.active ? `${a.active} van ${a.max} kijkt` : `${a.max} ${a.max === 1 ? "scherm" : "schermen"}, niemand kijkt`}` : esc(a.status === 'Expired' ? 'Verlopen op ' + date(a.exp) : a.status || 'Werkt niet')}</small></div>
+      <small>${a.valid ? `${a.active ? 'Kijkt nu' : 'Vrij'} · tot ${esc(date(a.exp))}` : a.exp && !a.status ? `Vrij · tot ${esc(date(a.exp))}` : esc(a.status === 'Expired' ? 'Verlopen' : a.status === 'Niet bereikbaar' ? 'Niet gecontroleerd' : a.status || 'Werkt niet')}</small></div>
     <div class="acc-acts">${list.length > 1 && !a.primary ? `<button data-acc-primary="${a.i}">Maak primair</button>` : ''}<button data-acc-name="${a.i}">Naam</button>${list.length > 1 ? `<button class="danger" data-acc-del="${a.i}">Weghalen</button>` : ''}</div>
   </div>`).join('');
   $$('[data-acc-name]', box).forEach(b => b.onclick = async () => {

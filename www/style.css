@@ -1060,3 +1060,13 @@ html::-webkit-scrollbar, body::-webkit-scrollbar, .sheet::-webkit-scrollbar, .sh
 .hdot.ok { background: #30d158; box-shadow: 0 0 0 4px rgba(48,209,88,.18); }
 .hdot.blocked { background: #ff453a; box-shadow: 0 0 0 4px rgba(255,69,58,.18); animation: hpulse 1.6s ease-in-out infinite; }
 @keyframes hpulse { 50% { box-shadow: 0 0 0 7px rgba(255,69,58,.05); } }
+
+/* Instellingen: alle regels dezelfde vorm (hoogte, letters, grijze tweede regel) */
+.settings .acc-row { min-height: 54px; padding: 10px 16px; align-items: center; }
+.settings .acc-main { gap: 2px; }
+.settings .acc-main b { font-size: 15.5px; font-weight: 600; }
+.settings .acc-main small { font-size: 13px; color: var(--muted); }
+.settings .acc-row.bad .acc-main small { color: var(--muted); }
+.settings .acc-tag { font-size: 11px; padding: 2px 6px; margin-left: 6px; }
+.settings .acc-head { margin-bottom: 2px; }
+.settings .set-row .btn.sm { padding: 7px 14px; }

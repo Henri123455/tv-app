@@ -843,7 +843,7 @@ const hostOf = s => { try { return new URL(s).host; } catch { return String(s ||
 const accErr = (status, msg) => Object.assign(new Error(msg), { status });
 const accInfos = new Map();
 const accBusy = new Map(); // account → tot wanneer overslaan (de aanbieder zei net "vol" of gaf geen beeld)
-function accInfo(a, maxAge = 10000) {
+function accInfo(a, maxAge = 30000) {
   const k = accId(a), hit = accInfos.get(k);
   // Verlopen of onbereikbaar account: maar eens per 5 minuten opnieuw vragen (anders blokkeert de aanbieder je adres)
   if (hit && maxAge > 0 && (!hit.last || !accValid(hit.last)) && hit.done) maxAge = Math.max(maxAge, 300000);
@@ -861,8 +861,9 @@ function catalogAcc() { return (catalogPick && accList().some(a => accId(a) === 
 async function refreshCatalog() {
   const order = accOrder();
   if (order.length < 2) { catalogPick = null; return; }
-  const infos = await Promise.all(order.map(a => accInfo(a, 60000)));
-  catalogPick = order[Math.max(0, infos.findIndex(accValid))];
+  // Eén voor één: het tweede account wordt alleen gevraagd als het primaire niet werkt
+  for (const a of order) if (accValid(await accInfo(a, 30 * 60e3))) { catalogPick = a; return; }
+  catalogPick = order[0];
 }
 // Welk account nu? Primair als daar niemand op kijkt; kijkt daar iemand, dan het account waar niemand op kijkt;
 // anders het account met de meeste plek. Verlopen accounts en accounts die net "vol" zeiden worden overgeslagen.
@@ -875,7 +876,7 @@ function holdConn(a, holdMs = 4000) {
   if (!a) return () => {};
   const k = accId(a); accOpen.set(k, (accOpen.get(k) || 0) + 1);
   let done = false;
-  return () => { if (done) return; done = true; setTimeout(() => accOpen.set(k, Math.max(0, (accOpen.get(k) || 1) - 1)), holdMs); };
+  return () => { if (done) return; done = true; setTimeout(() => { accOpen.set(k, Math.max(0, (accOpen.get(k) || 1) - 1)); fullUntil = 0; }, holdMs); };
 }
 const ownOpen = a => accOpen.get(accId(a)) || 0;
 // ---- Is de aanbieder bereikbaar? (voor de meter in Instellingen) ----
@@ -892,11 +893,11 @@ function healthView() {
 }
 // ---- Rem op ALLE vragen aan de aanbieder (lijsten, info, gids, schermen tellen) ----
 // Gemeten 2026-11-26: na "Alles opnieuw laden" vuurde de app honderden vragen in een paar seconden af (gids per
-// zender, info per film/serie, sportgids) en blokkeerde de aanbieder je adres. Nu: hooguit ~3 vragen per seconde,
-// en achtergrondwerk (gids op de kaarten, posters, jaartallen, sport) hooguit 90 per minuut. Wat jij aantikt
+// zender, info per film/serie, sportgids) en blokkeerde de aanbieder je adres. Nu: hooguit 1 vraag per seconde,
+// en achtergrondwerk (gids op de kaarten, posters, jaartallen, sport) hooguit 20 per minuut. Wat jij aantikt
 // (een film openen, de gids in de speler) gaat altijd voor.
 const apiQ = { fg: [], bg: [], last: 0, bgTimes: [], timer: null };
-const API_GAP = 350, BG_PER_MIN = 90;
+const API_GAP = 1000, BG_PER_MIN = 20;
 function apiGate(bg) {
   return new Promise((res, rej) => {
     const q = bg ? apiQ.bg : apiQ.fg;
@@ -937,16 +938,28 @@ async function connGate() {
 // Welk account nu? Primair als daar niemand op kijkt; kijkt daar iemand, dan het account waar niemand op kijkt;
 // anders het account met de meeste plek. Verlopen accounts en accounts die net "vol" zeiden worden overgeslagen.
 // full = alles bezet: dan NIET bij de aanbieder proberen (dat levert alleen een "509" op en telt mee voor een blokkade).
+// Eén voor één, primair eerst. Een volgend account wordt pas aangesproken als het vorige vol is of niet werkt
+// (de aanbieder lijkt het niet te waarderen als twee accounts steeds vanaf één adres worden gecontroleerd).
+// Eerst de eigen telling: zit dit apparaat zelf al op het account, dan hoeft de aanbieder niet gevraagd te worden.
+const knownMax = a => Number(accInfos.get(accId(a))?.last?.max_connections) || 1;
+// Alles vol gezien? Dan 90 s lang meteen "vol" zeggen zonder de aanbieder te vragen (op "vol" blijven drukken of
+// automatisch opnieuw proberen = geen verkeer). Stopt dit apparaat zelf met kijken, dan meteen opnieuw kijken.
+var fullUntil = 0;
 async function pickAccount(avoid) {
   const order = accOrder();
-  const infos = await Promise.all(order.map(a => accInfo(a)));
-  const c = order.map((a, i) => {
-    const u = infos[i], max = Number(u?.max_connections) || 1, used = Math.max(Number(u?.active_cons) || 0, ownOpen(a));
-    return { a, u, used, free: max - used };
-  }).filter(x => (order.length < 2 || accValid(x.u)) && accId(x.a) !== accId(avoid) && !((accBusy.get(accId(x.a)) || 0) > Date.now()));
-  const pick = c.find(x => x.used === 0) || c.filter(x => x.free > 0).sort((x, y) => y.free - x.free)[0];
-  if (pick) return { a: pick.a, full: false };
-  return { a: (c[0] || {}).a || order.find(a => accId(a) !== accId(avoid)) || order[0], full: true };
+  if (Date.now() < fullUntil && !avoid) return { a: order[0], full: true };
+  let first = null;
+  for (const a of order) {
+    if (accId(a) === accId(avoid) || (accBusy.get(accId(a)) || 0) > Date.now()) continue;
+    first ||= a;
+    if (ownOpen(a) >= knownMax(a)) continue; // zelf vol: niet vragen
+    const u = await accInfo(a);
+    if (order.length > 1 && !accValid(u)) continue;
+    const max = Number(u?.max_connections) || 1, used = Math.max(Number(u?.active_cons) || 0, ownOpen(a));
+    if (used < max) return { a, full: false };
+  }
+  if (!avoid) fullUntil = Date.now() + 90000;
+  return { a: first || order[0], full: true };
 }
 const markBusy = (a, ms = 60000) => { if (a) accBusy.set(accId(a), Date.now() + ms); };
 // Adres bij de aanbieder voor "live/123.ts", "movie/55.mkv", "timeshift/90/2026-11-25:20-00/123.m3u8".
@@ -973,7 +986,7 @@ async function streamURL(p, { sticky = 0, avoid = null } = {}) {
 const STICKY_VOD = 3 * 3600e3, STICKY_LIVE = 0;
 async function accountsView() {
   const l = accList(), p = primaryIdx();
-  const infos = await Promise.all(l.map(a => accInfo(a)));
+  const infos = await Promise.all(l.map((a, i) => accInfo(a, i === p ? 30000 : 10 * 60e3)));
   return l.map((a, i) => {
     const u = infos[i] || {};
     return { i, name: a.name || '', username: a.username, host: hostOf(a.server), primary: i === p, valid: accValid(infos[i]), status: infos[i] ? (u.status || '') : 'Niet bereikbaar',
@@ -981,10 +994,12 @@ async function accountsView() {
   });
 }
 async function connTotals() {
-  const v = await accountsView();
-  if (v.every(x => x.status === 'Niet bereikbaar') || !v.some(x => x.valid)) return { active: -1, max: 0 };
-  const use = v.filter(x => x.valid).length ? v.filter(x => x.valid) : v.filter(x => x.primary);
-  return { active: use.reduce((n, x) => n + x.active, 0), max: use.reduce((n, x) => n + x.max, 0), accounts: v.length };
+  const order = accOrder(); if (!order.length) return { active: -1, max: 0 };
+  const u = await accInfo(order[0], 60000); // hooguit eens per minuut vragen
+  if (!u || !accValid(u)) return { active: -1, max: 0 };
+  let active = Number(u.active_cons) || 0, max = Number(u.max_connections) || 1;
+  for (const a of order.slice(1)) { const last = accInfos.get(accId(a))?.last; if (last && !accValid(last)) continue; active += ownOpen(a); max += knownMax(a); }
+  return { active: Math.min(active, max), max, accounts: order.length };
 }
 async function addAccount(b) {
   const c = { server: String(b.server || '').trim() || catalogAcc().server, username: String(b.username || '').trim(), password: String(b.password || '').trim() };
