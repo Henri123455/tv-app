@@ -88,10 +88,12 @@ async function api(params) {
     try {
       return await limited(async () => {
         const r = await realFetch(apiURL(params), { signal: AbortSignal.timeout(!params.category_id && /streams$|^get_series$/.test(params.action || '') ? 120000 : 30000) });
+        noteHealth(true);
         if (!r.ok) throw new Error('API ' + r.status);
         return r.json();
       });
     } catch (e) {
+      if (e?.name === 'TypeError' || /fetch failed|timeout|abort/i.test(String(e?.message || e))) noteHealth(false);
       if (attempt >= 1) throw e;
       await new Promise(r => setTimeout(r, 3000));
     }
@@ -847,7 +849,7 @@ function accInfo(a, maxAge = 10000) {
   if (hit && maxAge > 0 && (!hit.last || !accValid(hit.last)) && hit.done) maxAge = Math.max(maxAge, 300000);
   if (hit && Date.now() - hit.t < maxAge) return hit.p;
   const e = { t: Date.now(), last: hit?.last || null };
-  e.p = apiGate(false).then(() => fetch(apiURL({}, a), { signal: AbortSignal.timeout(5000) })).then(r => r.json()).then(j => { const u = j?.user_info || null; if (u) e.last = u; return u; }).catch(() => e.last).finally(() => { e.done = true; });
+  e.p = apiGate(false).then(() => fetch(apiURL({}, a), { signal: AbortSignal.timeout(5000) })).then(r => { noteHealth(true); return r.json(); }, err => { noteHealth(false); throw err; }).then(j => { const u = j?.user_info || null; if (u) e.last = u; return u; }).catch(() => e.last).finally(() => { e.done = true; });
   accInfos.set(k, e);
   return e.p;
 }
@@ -876,6 +878,18 @@ function holdConn(a, holdMs = 4000) {
   return () => { if (done) return; done = true; setTimeout(() => accOpen.set(k, Math.max(0, (accOpen.get(k) || 1) - 1)), holdMs); };
 }
 const ownOpen = a => accOpen.get(accId(a)) || 0;
+// ---- Is de aanbieder bereikbaar? (voor de meter in Instellingen) ----
+// Alleen afgeleid van wat de app toch al vraagt. Geen antwoord/verbinding geweigerd = waarschijnlijk geblokkeerd.
+const health = { okAt: 0, failAt: 0, since: 0 };
+function noteHealth(ok) {
+  const now = Date.now();
+  if (ok) { health.okAt = now; health.since = 0; }
+  else { health.failAt = now; if (!health.since) health.since = now; }
+}
+function healthView() {
+  const blocked = health.since && health.failAt > health.okAt;
+  return { state: blocked ? 'blocked' : health.okAt ? 'ok' : 'unknown', since: blocked ? health.since : 0, okAt: health.okAt, checked: Math.max(health.okAt, health.failAt) };
+}
 // ---- Rem op ALLE vragen aan de aanbieder (lijsten, info, gids, schermen tellen) ----
 // Gemeten 2026-11-26: na "Alles opnieuw laden" vuurde de app honderden vragen in een paar seconden af (gids per
 // zender, info per film/serie, sportgids) en blokkeerde de aanbieder je adres. Nu: hooguit ~3 vragen per seconde,
@@ -1124,6 +1138,16 @@ async function route(url, init) {
     if (!cfg) return { loggedIn: false, app: true };
     if (!account) { try { account = await (await realFetch(apiURL({}), { signal: AbortSignal.timeout(15000) })).json(); } catch {} }
     return { loggedIn: true, app: true, server: cfg.server, username: catalogAcc().username, user: account?.user_info || null, ffmpeg: false, lan: null, accounts: accList().length };
+  }
+  // Meter in Instellingen: kan de app bij de aanbieder? Bij twijfel hooguit eens per minuut kort kloppen (zonder inlog)
+  if (p === '/api/health') {
+    if (cfg && healthView().state !== 'ok' && Date.now() - (route.probeAt || 0) > 60000) {
+      route.probeAt = Date.now();
+      let ok = false;
+      try { await realFetch(accBase(catalogAcc()) + '/', { method: 'HEAD', signal: AbortSignal.timeout(5000) }); ok = true; } catch {}
+      noteHealth(ok);
+    }
+    return healthView();
   }
   // Accounts (zelfde als op de pc): bekijken, toevoegen, primair maken, weghalen
   if (p === '/api/accounts' && cfg) {

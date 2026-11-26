@@ -2275,6 +2275,7 @@ $('#accountBtn').onclick = async () => {
 
     <div class="set-sec"><h3>Lijsten</h3>
       <div class="set-card">
+        <div class="set-row"><span class="hdot" id="hDot"></span><span class="set-txt"><b>Verbinding met aanbieder</b><small id="hTxt">Controleren…</small></span></div>
         <div class="set-row"><span class="set-txt"><b>Lijsten verversen</b><small>Nieuwe zenders, films en series ophalen</small></span><button class="btn glass sm" id="reloadAll">Verversen</button></div>
       </div>
     </div>
@@ -2314,6 +2315,7 @@ $('#accountBtn').onclick = async () => {
   };
   $('#switchProfile').onclick = () => { closeTop(); setTimeout(showWho, 60); };
   renderAccounts();
+  updateHealth();
   $('#accAddBtn').onclick = () => { const f = $('#accAdd'); f.hidden = !f.hidden; if (!f.hidden) f.paste.focus(); };
   pasteFill($('#accAdd'));
   $('#accAdd').onsubmit = async e => {
@@ -2378,6 +2380,22 @@ function pasteFill(form) {
   });
 }
 pasteFill($('#loginForm'));
+
+// Meter "Verbinding met aanbieder": groen = verbonden, rood = je internetadres is (tijdelijk) geblokkeerd.
+// Ververst zichzelf zolang de instellingen open staan (vraagt alleen de eigen pc/app, niet de aanbieder).
+async function updateHealth() {
+  const dot = $('#hDot'), txt = $('#hTxt'); if (!dot || !txt) return;
+  let h = null; try { h = await (await fetch('/api/health')).json(); } catch {}
+  if (!$('#hDot')) return;
+  const hm = t => new Date(t).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+  const st = h?.state || 'unknown';
+  dot.className = 'hdot ' + st;
+  txt.textContent = st === 'ok' ? 'Verbonden, alles werkt'
+    : st === 'blocked' ? `Geen verbinding sinds ${hm(h.since)}. Meestal een tijdelijke blokkade van je wifi-adres; dit springt vanzelf op groen als het voorbij is (4G werkt wel).`
+    : 'Nog niet bekend';
+  clearTimeout(updateHealth.t);
+  updateHealth.t = setTimeout(updateHealth, st === 'ok' ? 30000 : 15000);
+}
 
 // Lijst met accounts: status, geldig tot, wie er kijkt; primair maken en weghalen
 async function renderAccounts() {

@@ -101,6 +101,16 @@ async function route(url, init) {
     if (!account) { try { account = await (await realFetch(apiURL({}), { signal: AbortSignal.timeout(15000) })).json(); } catch {} }
     return { loggedIn: true, app: true, server: cfg.server, username: catalogAcc().username, user: account?.user_info || null, ffmpeg: false, lan: null, accounts: accList().length };
   }
+  // Meter in Instellingen: kan de app bij de aanbieder? Bij twijfel hooguit eens per minuut kort kloppen (zonder inlog)
+  if (p === '/api/health') {
+    if (cfg && healthView().state !== 'ok' && Date.now() - (route.probeAt || 0) > 60000) {
+      route.probeAt = Date.now();
+      let ok = false;
+      try { await realFetch(accBase(catalogAcc()) + '/', { method: 'HEAD', signal: AbortSignal.timeout(5000) }); ok = true; } catch {}
+      noteHealth(ok);
+    }
+    return healthView();
+  }
   // Accounts (zelfde als op de pc): bekijken, toevoegen, primair maken, weghalen
   if (p === '/api/accounts' && cfg) {
     if (method === 'POST') { const r = await addAccount(body()); account = null; return r; }

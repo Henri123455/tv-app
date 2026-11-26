@@ -88,10 +88,12 @@ async function api(params) {
     try {
       return await limited(async () => {
         const r = await realFetch(apiURL(params), { signal: AbortSignal.timeout(!params.category_id && /streams$|^get_series$/.test(params.action || '') ? 120000 : 30000) });
+        noteHealth(true);
         if (!r.ok) throw new Error('API ' + r.status);
         return r.json();
       });
     } catch (e) {
+      if (e?.name === 'TypeError' || /fetch failed|timeout|abort/i.test(String(e?.message || e))) noteHealth(false);
       if (attempt >= 1) throw e;
       await new Promise(r => setTimeout(r, 3000));
     }
