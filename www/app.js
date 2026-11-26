@@ -2681,7 +2681,7 @@ function startApp() {
   measurePerf();
   setTimeout(hideSplash, 4000);
   const t = store.get('tab', 'live');
-  setTab(['live', 'vod', 'series', 'archive', 'mine', 'search'].includes(t) ? t : 'live');
+  setTab(['live', 'vod', 'series', 'mine', 'search'].includes(t) ? t : 'live');
   // De iPhone speelt alles zelf af; alleen andere apparaten hebben de speler-bibliotheken nodig
   if (!APPLE_NATIVE) (window.requestIdleCallback || setTimeout)(() => engines().catch(() => {}), { timeout: 3000 });
 }

@@ -590,7 +590,7 @@ const SPORT_TOPIC = /ESPN|ZIGGO|VOETBAL|FORMULE|RACING|DAZN|VIAPLAY|SPORT/i;
 const NO_SPORT = /herhaling|samenvatting|highlights|replay|\(r\)|magazine|studio|journaal|nieuws|teleshop|programma|gesloten|einde uitzending|to be announced|tba$|vandaag|dit was|weekend|legends|iconic|voorbeschouwing|nabeschouwing|preview|review|documentaire|podcast|^ziggo( sport)?( tv)?$|^espn\s*\d*$|^viaplay|^dazn$/i;
 let sportCache = null;
 async function sportToday() {
-  if (sportCache && Date.now() - sportCache.t < 10 * 60e3) return sportCache.data;
+  if (sportCache && Date.now() - sportCache.t < 30 * 60e3) return sportCache.data; // hooguit eens per half uur (36 gids-vragen)
   const home = await liveHome();
   const chans = home.nl.filter(r => SPORT_TOPIC.test(r.title)).flatMap(r => r.items).slice(0, 36);
   const now = Date.now() / 1000, end = new Date(); end.setHours(23, 59, 59, 999);
