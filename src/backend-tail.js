@@ -153,9 +153,12 @@ async function route(url, init) {
 
   // "Alles opnieuw laden": alles vergeten en vers ophalen bij de aanbieder
   if (p === '/api/refresh' && method === 'POST') {
-    cache.clear(); stable.clear(); searchCache.clear();
+    // Alleen de lijsten en de gids opnieuw; info/posters blijven (alles opnieuw = honderden vragen = blokkade)
+    const LIST = /(^||)(cat:|l6:|epg:)/;
+    for (const k of [...cache.keys()]) if (LIST.test(k)) cache.delete(k);
+    stable.clear(); searchCache.clear();
     for (const t of ['vod', 'series']) { delete fullReady[t]; delete fullLoading[t]; }
-    await idb.clear();
+    await idb.clearWhere(k => LIST.test(k));
     await route('/api/home?type=live', {});
     warmUp();
     return { ok: true };

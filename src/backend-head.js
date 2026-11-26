@@ -29,7 +29,9 @@ const idb = (() => {
     const db = await open();
     return new Promise((res, rej) => { const t = db.transaction('kv', mode); const q = fn(t.objectStore('kv')); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); });
   };
-  return { get: k => run('readonly', s => s.get(k)).catch(() => null), set: (k, v) => run('readwrite', s => s.put(v, k)).catch(() => {}), clear: () => run('readwrite', s => s.clear()).catch(() => {}) };
+  return { get: k => run('readonly', s => s.get(k)).catch(() => null), set: (k, v) => run('readwrite', s => s.put(v, k)).catch(() => {}), clear: () => run('readwrite', s => s.clear()).catch(() => {}),
+    // Alleen sleutels die aan test voldoen weggooien (bijv. alleen de lijsten)
+    clearWhere: async test => { const keys = await run('readonly', s => s.getAllKeys()).catch(() => []) || []; await run('readwrite', s => { for (const k of keys) if (test(String(k))) s.delete(k); }).catch(() => {}); } };
 })();
 
 let cfg = readJSON('config', null);
@@ -41,7 +43,7 @@ function apiURL(params, c = catalogAcc()) {
   const u = new URL(c.server.replace(/\/+$/, '') + '/player_api.php');
   u.searchParams.set('username', c.username);
   u.searchParams.set('password', c.password);
-  for (const [k, v] of Object.entries(params)) if (v != null && v !== '') u.searchParams.set(k, v);
+  for (const [k, v] of Object.entries(params)) if (v != null && v !== '' && k[0] !== '_') u.searchParams.set(k, v);
   return u.href;
 }
 
@@ -79,19 +81,21 @@ function limited(fn) {
   });
 }
 async function api(params) {
-  return limited(async () => {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const big = !params.category_id && /streams$|^get_series$/.test(params.action || '');
-        const r = await realFetch(apiURL(params), { signal: AbortSignal.timeout(big ? 120000 : 30000) });
+  for (let attempt = 0; ; attempt++) {
+    // Eerst de rem (rustig aan bij de aanbieder, anders blokkeert hij je adres; _bg = achtergrondwerk, mag wachten),
+    // pas daarna een plekje in de rij. Zo staat wat jij aantikt nooit achter achtergrondwerk te wachten.
+    await apiGate(!!params._bg);
+    try {
+      return await limited(async () => {
+        const r = await realFetch(apiURL(params), { signal: AbortSignal.timeout(!params.category_id && /streams$|^get_series$/.test(params.action || '') ? 120000 : 30000) });
         if (!r.ok) throw new Error('API ' + r.status);
-        return await r.json();
-      } catch (e) {
-        if (attempt >= 1) throw e;
-        await new Promise(r => setTimeout(r, 700));
-      }
+        return r.json();
+      });
+    } catch (e) {
+      if (attempt >= 1) throw e;
+      await new Promise(r => setTimeout(r, 3000));
     }
-  });
+  }
 }
 
 // ===================== Gedeelde logica (uit server.js) =====================

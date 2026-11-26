@@ -338,7 +338,13 @@ const nowIO = new IntersectionObserver(es => es.forEach(e => {
 }), { rootMargin: '200px 400px' });
 setInterval(() => { if (document.hidden) return; for (const c of nowSeen) c.isConnected ? needNow(c) : nowSeen.delete(c); }, 60000);
 // Afbeeldingen zacht laten infaden; kapotte logo's vervangen door initialen
-document.addEventListener('load', e => { if (e.target.tagName === 'IMG') e.target.classList.add('ld'); }, true);
+// Zenderlogo's die zelf al een vlak met achtergrond zijn (zoals bij deze aanbieder, ~16:10) vullen het hele vakje;
+// losse logo's (transparant, heel breed of vierkant) blijven netjes passend in het midden
+document.addEventListener('load', e => {
+  const t = e.target; if (t.tagName !== 'IMG') return;
+  if (t.closest('.card.live')) { const r = t.naturalWidth / (t.naturalHeight || 1); t.classList.toggle('fill', r > 1.3 && r < 2.1); }
+  t.classList.add('ld');
+}, true);
 // Eigen "lui laden" van plaatjes: pas laden als een kaart bijna in beeld komt. Werkt ook in de
 // zijwaartse rijen op de iPhone (daar laat het ingebouwde loading="lazy" plaatjes soms helemaal weg).
 const imgIO = new IntersectionObserver(es => es.forEach(e => {
@@ -1198,6 +1204,15 @@ function showSheet(html) {
   if (sh.hidden) { sh.hidden = false; document.body.style.overflow = 'hidden'; pushLayer(hideSheet); }
   $('#sheetCard').scrollTop = 0;
 }
+// Meteen iets moois laten zien als je op een film/serie tikt (poster, titel, knoppen in wording), zoals Netflix:
+// de details vullen zich een fractie later aan. Nooit een leeg scherm met "Laden…".
+function loadingSheet(it) {
+  showSheet(`<div class="sheet-hero"><div><h2>${esc(tidyName(it.n))}</h2><div class="meta"><span class="sk sk-meta"></span></div></div></div>
+    <div class="sheet-body"><div class="hero-actions"><span class="sk sk-btn"></span><span class="sk sk-btn small"></span></div>
+    <span class="sk sk-line"></span><span class="sk sk-line"></span><span class="sk sk-line short"></span></div>`);
+  const hero = $('#sheetCard .sheet-hero');
+  if (hero && it.i) heroArt(hero, [], it.i, 700);
+}
 function hideSheet() { $('#sheet').hidden = true; document.body.style.overflow = ''; }
 $('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet' || e.target.closest('[data-close]')) closeTop(); });
 
@@ -1280,7 +1295,7 @@ function sourceButton(type, it, current, onPick) {
 async function openMovie(it) {
   const k = favKey('vod', it.id);
   const hk = findHist('vod', it)?.k || k;
-  showSheet(`<div class="sheet-hero"><div><h2>${esc(tidyName(it.n))}</h2></div></div><div class="sheet-body"><p class="muted">Laden…</p></div>`);
+  loadingSheet(it);
   let info = {};
   try { info = await getInfo('vod', it.id); } catch {}
   const md = info.movie_data || {};
@@ -1319,7 +1334,7 @@ async function openMovie(it) {
 
 async function openSeries(it, src) { // src: een andere versie van de serie (via de knop "Bron")
   const k = favKey('series', it.id);
-  showSheet(`<div class="sheet-hero"><div><h2>${esc(tidyName(it.n))}</h2></div></div><div class="sheet-body"><p class="muted">Laden…</p></div>`);
+  loadingSheet(it);
   let info = {};
   try { info = await getInfo('series', src ? src.id : it.id); } catch {}
   const raw = Array.isArray(info.info) ? {} : info.info || {};
@@ -2232,51 +2247,55 @@ $('#accountBtn').onclick = async () => {
   const u = S.session?.user || {};
   const exp = u.exp_date ? new Date(u.exp_date * 1000).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
   const lan = S.session?.lan;
-  showSheet(`<div class="account">
+  // Instellingen: overzichtelijk in vakken (zoals op de iPhone): eerst wat je het vaakst nodig hebt
+  const pc = !(S.session?.app || matchMedia('(max-width: 760px)').matches);
+  showSheet(`<div class="account settings">
     <div class="acc-head">${avatarHTML(S.profile, 'lg')}<div><h2>${esc(S.profile.name)}</h2><button class="link" id="switchProfile">Wissel van profiel</button></div></div>
 
-    ${S.session?.app || matchMedia('(max-width: 760px)').matches ? '' : `<div class="group">
-      <h3>Op je telefoon</h3>
-      ${lan ? `<div class="qr-row"><div class="qr" id="qr"></div><ol>
-        <li>Zet je telefoon op dezelfde wifi als deze pc.</li>
-        <li>Scan de code met je camera, of open <code>${esc(lan)}</code> in Safari.</li>
-        <li>Tik op <b>Deel</b> → <b>Zet op beginscherm</b>. Nu heb je een TV-app-icoon.</li></ol></div>` : '<p class="muted">Geen wifi-netwerk gevonden.</p>'}
-      <p class="muted small">De pc moet aan staan met de app open. Buiten de deur kijken, GitHub en delen: <a class="link" href="/uitleg.html" target="_blank">lees de uitleg</a>.</p>
+    <div class="set-sec"><h3>Accounts</h3>
+      <div class="set-card">
+        <div id="accList"><div class="acc-row"><div class="acc-main"><div><b>${esc(S.session?.username || '')}</b></div><small>${esc(u.status || '')}${u.exp_date ? ' · geldig tot ' + esc(exp) : ''}</small></div></div></div>
+        <button class="set-row add" id="accAddBtn"><span class="set-ic">+</span><span>Account toevoegen</span></button>
+        <form class="acc-add" id="accAdd" hidden autocomplete="off">
+          <input name="paste" class="paste-field" placeholder="Plak hier je link of inloggegevens (vult alles in)" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <input name="name" placeholder="Naam (bijv. Set 2), mag leeg" maxlength="30">
+          <input name="server" placeholder="Server (leeg = dezelfde)" autocapitalize="off" spellcheck="false">
+          <input name="username" placeholder="Gebruikersnaam" required autocapitalize="off" spellcheck="false">
+          <input name="password" placeholder="Wachtwoord" required type="password">
+          <div class="acc-add-row"><button class="btn primary" type="submit">Toevoegen</button><span class="muted small" id="accAddMsg"></span></div>
+        </form>
+      </div>
+      <p class="set-foot">De app kijkt op je primaire account. Kijkt daar al iemand, dan gaat hij vanzelf naar het andere. Mijn lijst en verder kijken horen bij je profiel, dus gelden voor allebei.</p>
     </div>
 
-    <div class="group">
-      <h3>Delen met vrienden</h3>
-      <p>Dubbelklik in de map van de app op <b>Maak deelbestand.cmd</b>. Je krijgt dan <b>TV installeren.cmd</b> in je Downloads; stuur dat door. Jouw inlog en profielen gaan er <b>niet</b> mee in.</p>
-      <p class="muted small">Je vriend logt zelf in en maakt een eigen profiel. Met jouw abonnement kunnen maximaal 2 apparaten tegelijk kijken (pc's, telefoons en tv's samen).</p>
-    </div>`}
-
-    <div class="group">
-      <h3>Weergave</h3>
-      <div class="seg theme-seg">${[['auto', 'Automatisch'], ['light', 'Licht'], ['dark', 'Donker']].map(([k, l]) => `<button data-theme-pick="${k}" class="${store.get('theme', 'auto') === k ? 'active' : ''}">${l}</button>`).join('')}</div>
-      <p class="muted small">Automatisch volgt de instelling van je apparaat. Geldt alleen voor dit apparaat.</p>
+    <div class="set-sec"><h3>Weergave</h3>
+      <div class="set-card pad"><div class="seg theme-seg">${[['auto', 'Automatisch'], ['light', 'Licht'], ['dark', 'Donker']].map(([k, l]) => `<button data-theme-pick="${k}" class="${store.get('theme', 'auto') === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
+      <p class="set-foot">Automatisch volgt je apparaat. Geldt alleen voor dit apparaat.</p>
     </div>
 
-    <div class="group">
-      <h3>Lijsten verversen</h3>
-      <p class="muted small">Haalt alle zenders, films, series en programma's opnieuw op bij je aanbieder (bijvoorbeeld als er iets nieuws is of als iets niet klopt).</p>
-      <button class="btn glass reload-btn" id="reloadAll">Alles opnieuw laden</button>
+    <div class="set-sec"><h3>Lijsten</h3>
+      <div class="set-card">
+        <div class="set-row"><span class="set-txt"><b>Lijsten verversen</b><small>Nieuwe zenders, films en series ophalen</small></span><button class="btn glass sm" id="reloadAll">Verversen</button></div>
+      </div>
     </div>
 
-    <div class="group">
-      <h3>Accounts</h3>
-      <div id="accList"><div class="kv"><span>Status</span><span>${esc(u.status || '—')}</span><span>Geldig tot</span><span>${esc(exp)}</span><span>Schermen tegelijk</span><span>${esc(u.max_connections || '—')}</span><span>Gebruiker</span><span>${esc(S.session?.username)}</span></div></div>
-      <p class="muted small">Met twee accounts werkt de app als één: hij kijkt op je primaire account, en kijkt daar al iemand, dan schakelt hij vanzelf naar het andere. Mijn lijst en verder kijken horen bij je profiel en gelden dus voor allebei.</p>
-      <button class="btn glass" id="accAddBtn">Account toevoegen</button>
-      <form class="acc-add" id="accAdd" hidden autocomplete="off">
-        <input name="paste" class="paste-field" placeholder="Plak hier je link of inloggegevens (vult alles in)" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <input name="name" placeholder="Naam (bijv. Account 2), mag leeg" maxlength="30">
-        <input name="server" placeholder="Server (leeg = dezelfde)" autocapitalize="off" spellcheck="false">
-        <input name="username" placeholder="Gebruikersnaam" required autocapitalize="off" spellcheck="false">
-        <input name="password" placeholder="Wachtwoord" required type="password">
-        <div class="acc-add-row"><button class="btn primary" type="submit">Toevoegen</button><span class="muted small" id="accAddMsg"></span></div>
-      </form>
-    </div>
-    <button class="btn glass" id="logoutBtn">${S.session?.app ? 'Uitloggen' : 'Uitloggen op deze pc'}</button></div>`);
+    ${pc ? `<div class="set-sec"><h3>Meer</h3>
+      <div class="set-card">
+        <details class="set-more"><summary class="set-row"><span class="set-txt"><b>Op je telefoon kijken</b><small>Via de wifi van deze pc</small></span><span class="chev"></span></summary>
+          <div class="set-body">${lan ? `<div class="qr-row"><div class="qr" id="qr"></div><ol>
+            <li>Zet je telefoon op dezelfde wifi als deze pc.</li>
+            <li>Scan de code met je camera, of open <code>${esc(lan)}</code> in Safari.</li>
+            <li>Tik op <b>Deel</b> → <b>Zet op beginscherm</b>.</li></ol></div>` : '<p class="muted">Geen wifi-netwerk gevonden.</p>'}
+            <p class="muted small">De pc moet aan staan met de app open. <a class="link" href="/uitleg.html" target="_blank">Uitleg</a></p></div>
+        </details>
+        <details class="set-more"><summary class="set-row"><span class="set-txt"><b>Delen met vrienden</b><small>Installatiebestand zonder jouw inlog</small></span><span class="chev"></span></summary>
+          <div class="set-body"><p>Dubbelklik in de map van de app op <b>Maak deelbestand.cmd</b>. Je krijgt <b>TV installeren.cmd</b> in je Downloads; stuur dat door. Je vriend logt zelf in.</p></div>
+        </details>
+      </div>
+    </div>` : ''}
+
+    <div class="set-sec"><div class="set-card"><button class="set-row danger" id="logoutBtn">${S.session?.app ? 'Uitloggen' : 'Uitloggen op deze pc'}</button></div></div>
+  </div>`);
   $$('[data-theme-pick]').forEach(b => b.onclick = () => {
     store.set('theme', b.dataset.themePick); applyTheme();
     $$('[data-theme-pick]').forEach(x => x.classList.toggle('active', x === b));
@@ -2311,7 +2330,7 @@ $('#accountBtn').onclick = async () => {
     } catch (err) { msg.textContent = err.message; } finally { b.disabled = false; }
   };
   $('#logoutBtn').onclick = async () => { if (!confirm('Uitloggen? Je moet daarna opnieuw je server, gebruikersnaam en wachtwoord invullen.')) return; await fetch('/api/logout', { method: 'POST' }); location.reload(); };
-  if (lan) {
+  if (lan && $('#qr')) {
     try { await loadQR(); const qr = qrcode(0, 'M'); qr.addData(lan); qr.make(); $('#qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); } catch {}
   }
 };
@@ -2370,10 +2389,8 @@ async function renderAccounts() {
   box.innerHTML = list.map(a => `<div class="acc-row ${a.valid ? '' : 'bad'}">
     <div class="acc-main"><div><b>${esc(a.name || a.username)}</b>${a.primary ? '<span class="acc-tag">Primair</span>' : ''}</div>
       ${a.name ? `<small>${esc(a.username)}</small>` : ''}
-      <small>${a.valid ? `Geldig tot ${esc(date(a.exp))} · ${a.active ? `${a.active} van ${a.max} kijkt` : `${a.max} schermen, niemand kijkt`}` : esc(a.status === 'Expired' ? 'Verlopen op ' + date(a.exp) : a.status || 'Werkt niet')}</small></div>
-    <button class="link" data-acc-name="${a.i}">Naam</button>
-    ${list.length > 1 && !a.primary ? `<button class="link" data-acc-primary="${a.i}">Maak primair</button>` : ''}
-    ${list.length > 1 ? `<button class="link danger" data-acc-del="${a.i}">Weghalen</button>` : ''}
+      <small>${a.valid ? `Geldig tot ${esc(date(a.exp))} · ${a.active ? `${a.active} van ${a.max} kijkt` : `${a.max} ${a.max === 1 ? "scherm" : "schermen"}, niemand kijkt`}` : esc(a.status === 'Expired' ? 'Verlopen op ' + date(a.exp) : a.status || 'Werkt niet')}</small></div>
+    <div class="acc-acts">${list.length > 1 && !a.primary ? `<button data-acc-primary="${a.i}">Maak primair</button>` : ''}<button data-acc-name="${a.i}">Naam</button>${list.length > 1 ? `<button class="danger" data-acc-del="${a.i}">Weghalen</button>` : ''}</div>
   </div>`).join('');
   $$('[data-acc-name]', box).forEach(b => b.onclick = async () => {
     const a = list.find(x => String(x.i) === b.dataset.accName);

@@ -29,7 +29,9 @@ const idb = (() => {
     const db = await open();
     return new Promise((res, rej) => { const t = db.transaction('kv', mode); const q = fn(t.objectStore('kv')); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); });
   };
-  return { get: k => run('readonly', s => s.get(k)).catch(() => null), set: (k, v) => run('readwrite', s => s.put(v, k)).catch(() => {}), clear: () => run('readwrite', s => s.clear()).catch(() => {}) };
+  return { get: k => run('readonly', s => s.get(k)).catch(() => null), set: (k, v) => run('readwrite', s => s.put(v, k)).catch(() => {}), clear: () => run('readwrite', s => s.clear()).catch(() => {}),
+    // Alleen sleutels die aan test voldoen weggooien (bijv. alleen de lijsten)
+    clearWhere: async test => { const keys = await run('readonly', s => s.getAllKeys()).catch(() => []) || []; await run('readwrite', s => { for (const k of keys) if (test(String(k))) s.delete(k); }).catch(() => {}); } };
 })();
 
 let cfg = readJSON('config', null);
@@ -41,7 +43,7 @@ function apiURL(params, c = catalogAcc()) {
   const u = new URL(c.server.replace(/\/+$/, '') + '/player_api.php');
   u.searchParams.set('username', c.username);
   u.searchParams.set('password', c.password);
-  for (const [k, v] of Object.entries(params)) if (v != null && v !== '') u.searchParams.set(k, v);
+  for (const [k, v] of Object.entries(params)) if (v != null && v !== '' && k[0] !== '_') u.searchParams.set(k, v);
   return u.href;
 }
 
@@ -79,19 +81,21 @@ function limited(fn) {
   });
 }
 async function api(params) {
-  return limited(async () => {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const big = !params.category_id && /streams$|^get_series$/.test(params.action || '');
-        const r = await realFetch(apiURL(params), { signal: AbortSignal.timeout(big ? 120000 : 30000) });
+  for (let attempt = 0; ; attempt++) {
+    // Eerst de rem (rustig aan bij de aanbieder, anders blokkeert hij je adres; _bg = achtergrondwerk, mag wachten),
+    // pas daarna een plekje in de rij. Zo staat wat jij aantikt nooit achter achtergrondwerk te wachten.
+    await apiGate(!!params._bg);
+    try {
+      return await limited(async () => {
+        const r = await realFetch(apiURL(params), { signal: AbortSignal.timeout(!params.category_id && /streams$|^get_series$/.test(params.action || '') ? 120000 : 30000) });
         if (!r.ok) throw new Error('API ' + r.status);
-        return await r.json();
-      } catch (e) {
-        if (attempt >= 1) throw e;
-        await new Promise(r => setTimeout(r, 700));
-      }
+        return r.json();
+      });
+    } catch (e) {
+      if (attempt >= 1) throw e;
+      await new Promise(r => setTimeout(r, 3000));
     }
-  });
+  }
 }
 
 // ===================== Gedeelde logica (uit server.js) =====================
@@ -376,7 +380,7 @@ function seriesYear(info, name) {
 async function seriesYears(ids, names = {}) {
   const out = {};
   await Promise.all(ids.slice(0, 16).map(async id => {
-    try { out[id] = seriesYear(await cached('si:' + id, () => api({ action: 'get_series_info', series_id: id }), true), names[id]); } catch {}
+    try { out[id] = seriesYear(await cached('si:' + id, () => api({ action: 'get_series_info', series_id: id, _bg: 1 }), true), names[id]); } catch {}
   }));
   return out;
 }
@@ -422,8 +426,8 @@ async function artFor(type, ids, names = {}) {
     try {
       out[id] = await cached(`art3:${type}:${id}`, async () => {
         const j = type === 'vod'
-          ? await cached('vi:' + id, () => api({ action: 'get_vod_info', vod_id: id }), true)
-          : await cached('si:' + id, () => api({ action: 'get_series_info', series_id: id }), true);
+          ? await cached('vi:' + id, () => api({ action: 'get_vod_info', vod_id: id, _bg: 1 }), true)
+          : await cached('si:' + id, () => api({ action: 'get_series_info', series_id: id, _bg: 1 }), true);
         const i = Array.isArray(j.info) ? {} : j.info || {};
         const tries = [...new Set((type === 'vod' ? [i.movie_image, i.cover_big] : [i.cover]).map(fixIcon).filter(Boolean))];
         for (const u of tries) if (await imageOk(u)) return u;
@@ -480,9 +484,9 @@ async function subtitleList(type, name, year, tmdb, season, episode) {
 // ---------- Nu op tv: per zender wat er nu is en wat er hierna komt (voor de kaarten bij Live TV) ----------
 async function epgNow(ids) {
   const out = {};
-  await Promise.all(ids.slice(0, 40).map(async id => {
+  await Promise.all(ids.slice(0, 24).map(async id => {
     try {
-      const j = await cached('epg:' + id, () => api({ action: 'get_short_epg', stream_id: id, limit: 4 }));
+      const j = await cached('epg:' + id, () => api({ action: 'get_short_epg', stream_id: id, limit: 4, _bg: 1 }));
       const l = (j.epg_listings || []).map(e => ({ t: decodeB64(e.title), s: Number(e.start_timestamp), e: Number(e.stop_timestamp) }));
       const now = Date.now() / 1000, i = l.findIndex(x => x.s <= now && x.e > now);
       if (i >= 0) out[id] = { t: l[i].t, s: l[i].s, e: l[i].e, n: l.slice(i + 1).find(x => x.t && x.t !== l[i].t)?.t || '' };
@@ -590,7 +594,7 @@ async function sportToday() {
   for (let i = 0; i < chans.length; i += 6) {
     await Promise.all(chans.slice(i, i + 6).map(async ch => {
       try {
-        const j = await api({ action: 'get_short_epg', stream_id: ch.id, limit: 16 });
+        const j = await api({ action: 'get_short_epg', stream_id: ch.id, limit: 16, _bg: 1 });
         for (const e of j.epg_listings || []) {
           const s = Number(e.start_timestamp), en = Number(e.stop_timestamp), t = decodeB64(e.title).trim();
           if (!t || en < now || s > end.getTime() / 1000 || en - s < 20 * 60 || NO_SPORT.test(t)) continue;
@@ -837,13 +841,13 @@ const hostOf = s => { try { return new URL(s).host; } catch { return String(s ||
 const accErr = (status, msg) => Object.assign(new Error(msg), { status });
 const accInfos = new Map();
 const accBusy = new Map(); // account → tot wanneer overslaan (de aanbieder zei net "vol" of gaf geen beeld)
-function accInfo(a, maxAge = 2500) {
+function accInfo(a, maxAge = 10000) {
   const k = accId(a), hit = accInfos.get(k);
   // Verlopen of onbereikbaar account: maar eens per 5 minuten opnieuw vragen (anders blokkeert de aanbieder je adres)
   if (hit && maxAge > 0 && (!hit.last || !accValid(hit.last)) && hit.done) maxAge = Math.max(maxAge, 300000);
   if (hit && Date.now() - hit.t < maxAge) return hit.p;
   const e = { t: Date.now(), last: hit?.last || null };
-  e.p = fetch(apiURL({}, a), { signal: AbortSignal.timeout(5000) }).then(r => r.json()).then(j => { const u = j?.user_info || null; if (u) e.last = u; return u; }).catch(() => e.last).finally(() => { e.done = true; });
+  e.p = apiGate(false).then(() => fetch(apiURL({}, a), { signal: AbortSignal.timeout(5000) })).then(r => r.json()).then(j => { const u = j?.user_info || null; if (u) e.last = u; return u; }).catch(() => e.last).finally(() => { e.done = true; });
   accInfos.set(k, e);
   return e.p;
 }
@@ -872,6 +876,39 @@ function holdConn(a, holdMs = 4000) {
   return () => { if (done) return; done = true; setTimeout(() => accOpen.set(k, Math.max(0, (accOpen.get(k) || 1) - 1)), holdMs); };
 }
 const ownOpen = a => accOpen.get(accId(a)) || 0;
+// ---- Rem op ALLE vragen aan de aanbieder (lijsten, info, gids, schermen tellen) ----
+// Gemeten 2026-11-26: na "Alles opnieuw laden" vuurde de app honderden vragen in een paar seconden af (gids per
+// zender, info per film/serie, sportgids) en blokkeerde de aanbieder je adres. Nu: hooguit ~3 vragen per seconde,
+// en achtergrondwerk (gids op de kaarten, posters, jaartallen, sport) hooguit 90 per minuut. Wat jij aantikt
+// (een film openen, de gids in de speler) gaat altijd voor.
+const apiQ = { fg: [], bg: [], last: 0, bgTimes: [], timer: null };
+const API_GAP = 350, BG_PER_MIN = 90;
+function apiGate(bg) {
+  return new Promise((res, rej) => {
+    const q = bg ? apiQ.bg : apiQ.fg;
+    q.push({ res, rej });
+    // Te veel achtergrondwerk in de rij (snel scrollen)? De oudste vragen laten vallen: die kaarten zijn al uit beeld
+    while (apiQ.bg.length > 40) apiQ.bg.shift().rej(new Error('te druk'));
+    pumpApi();
+  });
+}
+function pumpApi() {
+  if (apiQ.timer) return;
+  const now = Date.now();
+  apiQ.bgTimes = apiQ.bgTimes.filter(t => now - t < 60000);
+  const canBg = apiQ.bgTimes.length < BG_PER_MIN;
+  if (!apiQ.fg.length && !(canBg && apiQ.bg.length)) {
+    if (apiQ.bg.length) apiQ.timer = setTimeout(() => { apiQ.timer = null; pumpApi(); }, 60000 - (now - apiQ.bgTimes[0]) + 10);
+    return;
+  }
+  const wait = Math.max(0, apiQ.last + API_GAP - now);
+  apiQ.timer = setTimeout(() => {
+    apiQ.timer = null; apiQ.last = Date.now();
+    const next = apiQ.fg.shift() || (apiQ.bgTimes.push(Date.now()), apiQ.bg.shift());
+    next?.res();
+    pumpApi();
+  }, wait);
+}
 // Nieuwe verbindingen rustig openen: minstens 1,2 s ertussen en hooguit 20 per minuut (anders ziet het eruit als een aanval)
 const gate = { last: 0, times: [] };
 async function connGate() {
@@ -881,6 +918,7 @@ async function connGate() {
   const wait = Math.max(0, gate.last + 1200 - now);
   gate.last = now + wait; gate.times.push(now + wait);
   if (wait) await new Promise(r => setTimeout(r, wait));
+  await apiGate(false); // ook meetellen in de algemene rem
 }
 // Welk account nu? Primair als daar niemand op kijkt; kijkt daar iemand, dan het account waar niemand op kijkt;
 // anders het account met de meeste plek. Verlopen accounts en accounts die net "vol" zeiden worden overgeslagen.
@@ -1139,9 +1177,12 @@ async function route(url, init) {
 
   // "Alles opnieuw laden": alles vergeten en vers ophalen bij de aanbieder
   if (p === '/api/refresh' && method === 'POST') {
-    cache.clear(); stable.clear(); searchCache.clear();
+    // Alleen de lijsten en de gids opnieuw; info/posters blijven (alles opnieuw = honderden vragen = blokkade)
+    const LIST = /(^||)(cat:|l6:|epg:)/;
+    for (const k of [...cache.keys()]) if (LIST.test(k)) cache.delete(k);
+    stable.clear(); searchCache.clear();
     for (const t of ['vod', 'series']) { delete fullReady[t]; delete fullLoading[t]; }
-    await idb.clear();
+    await idb.clearWhere(k => LIST.test(k));
     await route('/api/home?type=live', {});
     warmUp();
     return { ok: true };
