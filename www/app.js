@@ -278,6 +278,8 @@ async function cachedApi(url, onFresh) {
 // ================= Kaarten =================
 const HEART = '<svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>';
 const PLAY_ICON = '<svg viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" fill="currentColor"/></svg>';
+// Dikke pijlpunt (zonder staafje) achter "Bekijk meer", even hoog als de tekst
+const SEE_ICON = '<svg viewBox="0 0 12 20" class="see-ico" aria-hidden="true"><path d="M0 0h4.6l7.4 10-7.4 10H0l7.4-10z" fill="currentColor"/></svg>';
 const CHEVRON = '<svg viewBox="0 0 24 24" class="chev"><path d="M9 5l7 7-7 7"/></svg>';
 // Nette plek voor titels zonder plaatje (kleur afgeleid van de titel) terwijl we er een zoeken
 function placeholder(n) {
@@ -491,12 +493,19 @@ function rowEl(title, { count, onAll } = {}) {
   const el = document.createElement('section');
   el.className = 'row';
   // Kopje links, rechts een nette knop "Alles" (zoals Netflix/Apple TV) in plaats van een pijltje vlak achter de tekst
-  el.innerHTML = `<div class="row-head"><div class="row-title"><h3>${esc(title)}</h3></div>${count ? `<span class="count">${count}</span>` : ''}${onAll ? `<button class="see-all">Bekijk meer${CHEVRON}</button>` : ''}</div>
+  el.innerHTML = `<div class="row-head"><div class="row-title"><h3>${esc(title)}</h3></div>${count ? `<span class="count">${count}</span>` : ''}<button class="see-all">Bekijk meer${SEE_ICON}</button></div>
     <div class="row-wrap"><button class="row-arrow l" aria-label="Terug"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><div class="shelf" data-ctx></div><button class="row-arrow r" aria-label="Verder"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button></div>`;
   const shelf = $('.shelf', el);
   $('.row-arrow.l', el).onclick = () => shelf.scrollBy({ left: -shelf.clientWidth * .85, behavior: 'smooth' });
   $('.row-arrow.r', el).onclick = () => shelf.scrollBy({ left: shelf.clientWidth * .85, behavior: 'smooth' });
-  if (onAll) { $('.see-all', el).onclick = onAll; $('.row-title', el).onclick = onAll; $('.row-title', el).classList.add('click'); }
+  // Elke rij heeft "Bekijk meer": rijen zonder eigen overzicht tonen hun eigen kaarten in een volledig overzicht
+  const all = onAll || (() => {
+    const cards = $$('.card[data-k]', shelf);
+    const type = shelf._type || (cards[0]?.dataset.k || 'vod:').split(':')[0];
+    const list = shelf._list || cards.map(c => items.get(c.dataset.k)).filter(Boolean);
+    if (list.length) openGridItems(title, type, list);
+  });
+  $('.see-all', el).onclick = all; $('.row-title', el).onclick = all; $('.row-title', el).classList.add('click');
   return el;
 }
 const skeletons = (type, n = 8) => Array.from({ length: n }, () => `<div class="card skeleton ${type === 'live' ? 'live' : 'poster'}"><div class="art"></div><div class="name">&nbsp;</div></div>`).join('');
@@ -879,7 +888,7 @@ function renderMine() {
     const l = list.filter(f => f.type === t);
     if (!l.length) continue;
     const max = TUNE.search[t === 'live' ? 0 : 1] * (TOUCH ? 1 : 2);
-    body.insertAdjacentHTML('beforeend', `<div class="row-head mine-head"><div class="row-title"><h3>${label}</h3></div>${l.length > max ? `<button class="see-all" data-all="${t}">Bekijk meer${CHEVRON}</button>` : ''}</div><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx>${l.slice(0, max).map(x => cardHTML(t, x, opt(x))).join('')}</div>`);
+    body.insertAdjacentHTML('beforeend', `<div class="row-head mine-head"><div class="row-title"><h3>${label}</h3></div>${l.length > max ? `<button class="see-all" data-all="${t}">Bekijk meer${SEE_ICON}</button>` : ''}</div><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx>${l.slice(0, max).map(x => cardHTML(t, x, opt(x))).join('')}</div>`);
     const g = $$('.grid[data-ctx]', body).pop(); g._list = l; g._type = t;
     const all = $(`[data-all="${t}"]`, body);
     if (all) all.onclick = () => {
