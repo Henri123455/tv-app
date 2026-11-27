@@ -685,7 +685,8 @@ function topTen(type) {
   function draw(list) {
     if (!list.length) return el.remove();
     shelf._list = list; shelf._type = type;
-    shelf.innerHTML = list.map((x, n) => `<div class="ranked ${type === 'live' ? 'live' : 'poster'}"><span class="rank-num">${n + 1}</span>${cardHTML(type, x)}</div>`).join('');
+    // Nummer op de cover (linksonder), kaarten op dezelfde lijn als de rijen erboven en eronder
+    shelf.innerHTML = list.map((x, n) => cardHTML(type, x).replace('<div class="art">', `<div class="art"><span class="rank-badge">${n + 1}</span>`)).join('');
   }
   return el;
 }
