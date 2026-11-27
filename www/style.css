@@ -1086,3 +1086,10 @@ input, textarea, [contenteditable], code { -webkit-user-select: text; user-selec
 [data-theme="light"] .see-all:hover { background: rgba(0,0,0,.09); }
 .mine-head { padding: 0; margin: 22px 0 10px; }
 .mine-head h3 { font-size: 20px; }
+
+/* "Bekijk meer" zoals bij Prime Video: rustige tekst rechts, geen knop, pijltje klein erachter */
+.see-all { background: none !important; padding: 4px 0 4px 8px; font-size: 14px; font-weight: 700; color: var(--muted); letter-spacing: .01em; }
+.see-all .chev { width: 14px; height: 14px; stroke-width: 2.8; margin-left: 1px; transition: transform .2s; }
+.see-all:hover { color: var(--text); }
+.see-all:hover .chev { transform: translateX(2px); }
+@media (hover: hover) { .row .see-all { opacity: 0; transition: opacity .2s, color .2s; } .row:hover .see-all, .row .see-all:focus-visible { opacity: 1; } }

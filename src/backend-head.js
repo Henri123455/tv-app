@@ -56,12 +56,12 @@ function cached(key, fn, disk = false, ttl = TTL) {
     fn().then(v => { cache.set(key, { t: Date.now(), p: Promise.resolve(v) }); if (disk) idb.set(dkey(), { t: Date.now(), v }); }).catch(() => { hit.busy = false; });
   };
   const hit = cache.get(key);
-  if (hit) { if (Date.now() - hit.t > ttl) refresh(hit); return hit.p; }
+  if (hit) { if (Date.now() - hit.t > ttl && !hit.queued) { hit.queued = true; scheduleRefresh(key, () => refresh(hit)); } return hit.p; }
   const entry = { t: Date.now(), p: null };
   entry.p = (async () => {
     if (disk) {
       const d = await idb.get(dkey());
-      if (d) { entry.t = d.t; if (Date.now() - d.t > ttl) refresh(entry); return d.v; }
+      if (d) { entry.t = d.t; if (Date.now() - d.t > ttl && !entry.queued) { entry.queued = true; scheduleRefresh(key, () => refresh(entry)); } return d.v; }
     }
     const v = await fn();
     if (disk) idb.set(dkey(), { t: Date.now(), v });

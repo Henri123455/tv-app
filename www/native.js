@@ -15,6 +15,23 @@ const src = (kind, id, ext) => window.TVBackend.pick(`${kind}/${id}.${ext}`, kin
 const APPLE_EXT = /^(mp4|m4v|mov|m3u8)$/i;
 
 let cur = null;
+// Zwart scherm met laadrondje zodra je op Afspelen tikt, tot de speler er is (niet eerst terug naar het hoofdscherm)
+let coverTimer = 0;
+function showCover() {
+  let c = document.getElementById('launchCover');
+  if (!c) {
+    c = document.createElement('div'); c.id = 'launchCover';
+    c.innerHTML = '<div class="lc-spin"></div>';
+    c.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:#000;display:grid;place-items:center;opacity:0;transition:opacity .15s';
+    const st = document.createElement('style');
+    st.textContent = '#launchCover .lc-spin{width:44px;height:44px;border-radius:50%;border:3px solid rgba(255,255,255,.18);border-top-color:#fff;animation:lcspin .8s linear infinite}@keyframes lcspin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(st); document.body.appendChild(c);
+  }
+  c.hidden = false; requestAnimationFrame(() => { c.style.opacity = '1'; });
+  clearTimeout(coverTimer); coverTimer = setTimeout(hideCover, 30000); // vangnet
+}
+function hideCover() { clearTimeout(coverTimer); const c = document.getElementById('launchCover'); if (c) { c.style.opacity = '0'; setTimeout(() => { if (c.style.opacity === '0') c.hidden = true; }, 200); } }
+const fail = msg => { hideCover(); toast(msg); };
 // user = je hebt zelf gesloten (kruisje/Gereed): dan stoppen, nooit "kapot" denken en een andere bron starten
 const done = (pos, ended, dur, user) => {
   const c = cur; cur = null; if (!c) return;
@@ -43,8 +60,8 @@ async function withVLC(o) {
     pip: pos => { if (!AV) return; toast('Tik op het beeld-in-beeld-knopje in de speler'); withApple(forApple({ ...o, start: pos > 5 ? pos : o.start || 0 })); },
     // Andere ondertitelgrootte gekozen: dezelfde film op dezelfde plek opnieuw openen
     reload: pos => withVLC({ ...o, start: o.live ? 0 : pos }) };
-  try { await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live, series: !!o.series, nextTitle: o.nextTitle || '', castFirst: !!o.castFirst, run: o.run || 0, duration: Number(o.duration) || 0 }); }
-  catch { cur = null; connMark(false); toast('Afspelen lukt niet'); }
+  try { setTimeout(hideCover, 900); await VLC.play({ url: o.url, title: o.title || '', start: o.start || 0, live: !!o.live, series: !!o.series, nextTitle: o.nextTitle || '', castFirst: !!o.castFirst, run: o.run || 0, duration: Number(o.duration) || 0 }); }
+  catch { cur = null; connMark(false); fail('Afspelen lukt niet'); }
 }
 async function withApple(o) {
   connMark(true);
@@ -58,7 +75,8 @@ async function withApple(o) {
       title: o.title || '', smallTitle: o.sub || '',
     });
     if (r && r.result === false) throw new Error(r.message);
-  } catch { if (VLC) withVLC(o); else { cur = null; connMark(false); toast('Afspelen lukt niet'); } }
+    setTimeout(hideCover, 600);
+  } catch { if (VLC) withVLC(o); else { cur = null; connMark(false); fail('Afspelen lukt niet'); } }
 }
 const play = (o, preferVLC) => (preferVLC || !AV) && VLC ? withVLC(o) : withApple(o);
 
@@ -92,6 +110,7 @@ async function alive(url, depth = 0) {
 // Elke keer afspelen krijgt een nummer: een oudere zoektocht naar een werkende bron mag nooit meer iets starten
 let playRun = 0;
 playLive = function (item, ctx) {
+  showCover();
   const run = ++playRun;
   const sources = [item.id, ...(item.alt || [])];
   const k = favKey('live', item.id);
@@ -104,7 +123,7 @@ playLive = function (item, ctx) {
     if (i > 0) toast('Andere bron geprobeerd');
     const url = await src('live', sources[i], 'ts');
     if (run !== playRun) return;
-    if (!url) { toast('Alle schermen zijn bezet. Stop eerst op een ander apparaat.'); return; }
+    if (!url) { fail('Alle schermen zijn bezet. Stop eerst op een ander apparaat.'); return; }
     startLive(i, url, false);
   };
   const startLive = (i, url, otherAcc) => {
@@ -121,7 +140,7 @@ playLive = function (item, ctx) {
         items.set(k2, { ...item, type: 'live' });
         saveHist({ k: k2, type: 'live', id: item.id, n: item.n, i: item.i, alt: item.alt });
         const old = url;
-        window.TVBackend.release(old, false);
+        window.TVBackend.release(old, 'now');
         const next = await src('live', item.id, 'ts');
         if (!next) { toast('Alle schermen zijn bezet'); return; }
         url = next;
@@ -132,7 +151,7 @@ playLive = function (item, ctx) {
         if (!user && pos >= 0.5 && run === playRun) {
           const r = await window.TVBackend.moved(url, `live/${item.id}.ts`, false);
           if (run !== playRun) return;
-          if (r === 'full') { toast('Iemand anders kijkt nu op dit account, en het andere account is ook bezet'); return; }
+          if (r === 'full') { fail('Iemand anders kijkt nu op dit account, en het andere account is ook bezet'); return; }
           if (r) { toast('Verder op je andere account'); return startLive(i, r, true); }
           return;
         }
@@ -142,7 +161,7 @@ playLive = function (item, ctx) {
         const alt = otherAcc ? null : await window.TVBackend.failed(url, `live/${sources[i]}.ts`, false);
         if (run !== playRun) { if (alt) window.TVBackend.release(alt, false); return; }
         if (alt) return startLive(i, alt, true);
-        if (i + 1 < sources.length) tryIdx(i + 1);
+        if (i + 1 < sources.length) { showCover(); tryIdx(i + 1); } else fail('Deze zender werkt nu niet');
       },
     }, true); // Zenders altijd in VLC: Apple's speler haperde of gaf alleen het QuickTime-teken bij deze streams
   };
@@ -161,6 +180,7 @@ async function episodeInSeries(seriesId, season, num) {
 // Films en afleveringen: .mp4 in Apple's speler, al het andere (en de vermomde "HQ"-streams) in VLC.
 // Werkt een versie niet (kapotte server), dan meteen de volgende versie van dezelfde film/aflevering.
 playVod = function (o) {
+  showCover();
   hideSheet(); const li = layers.indexOf(hideSheet); if (li >= 0) layers.splice(li, 1);
   countView(o.favKey, o.item);
   const sources = o.url ? [{ url: o.url }] : [{ id: o.id, e: o.ext, hq: o.item?.hq }];
@@ -181,6 +201,7 @@ playVod = function (o) {
   }
   const tryIdx = async i => {
     if (run !== playRun) return;
+    showCover(); // ook bij de volgende versie: zwart scherm, niet even het hoofdscherm
     let s = sources[i];
     if (!s && !seriesAlts.length && !askedAlts && !o.url) {
       // Alle bekende versies kapot: zoek dezelfde titel in alle lijsten (ook internationaal)
@@ -200,10 +221,10 @@ playVod = function (o) {
       // Alles leek kapot bij de snelle controle: dan toch de eerste echt proberen (de controle kan zich vergissen)
       const first = sources.find(x => x.dead && !x.tried);
       if (first) { first.tried = true; sources.push({ ...first, dead: false, forced: true }); return tryIdx(i); }
-      toast('Deze film/aflevering werkt nu niet. Probeer het later opnieuw.'); return;
+      fail('Deze film/aflevering werkt nu niet. Probeer het later opnieuw.'); return;
     }
     let url = s.url || await src(o.kind, s.id, s.e);
-    if (!url) { toast('Alle schermen zijn bezet. Stop eerst op een ander apparaat.'); return; }
+    if (!url) { fail('Alle schermen zijn bezet. Stop eerst op een ander apparaat.'); return; }
     const picked = url, path = `${o.kind}/${s.id}.${s.e}`;
     if (!s.url && !s.forced && !(await alive(url))) {
       // Werkt niet: was dit account vol? Dan dezelfde versie via het andere account
@@ -225,7 +246,7 @@ playVod = function (o) {
           if (o.hist) saveHist({ ...o.hist, pos, dur: dur || lastDur });
           const r = await window.TVBackend.moved(picked, path, true);
           if (run !== playRun) return;
-          if (r === 'full') { toast('Iemand anders kijkt nu op dit account, en het andere account is ook bezet'); return; }
+          if (r === 'full') { fail('Iemand anders kijkt nu op dit account, en het andere account is ook bezet'); return; }
           if (r) { toast('Verder op je andere account'); o.start = pos; sources.splice(i + 1, 0, { ...s, url: r, otherAcc: true, forced: true }); return tryIdx(i + 1); }
           return;
         }

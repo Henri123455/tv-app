@@ -56,12 +56,12 @@ function cached(key, fn, disk = false, ttl = TTL) {
     fn().then(v => { cache.set(key, { t: Date.now(), p: Promise.resolve(v) }); if (disk) idb.set(dkey(), { t: Date.now(), v }); }).catch(() => { hit.busy = false; });
   };
   const hit = cache.get(key);
-  if (hit) { if (Date.now() - hit.t > ttl) refresh(hit); return hit.p; }
+  if (hit) { if (Date.now() - hit.t > ttl && !hit.queued) { hit.queued = true; scheduleRefresh(key, () => refresh(hit)); } return hit.p; }
   const entry = { t: Date.now(), p: null };
   entry.p = (async () => {
     if (disk) {
       const d = await idb.get(dkey());
-      if (d) { entry.t = d.t; if (Date.now() - d.t > ttl) refresh(entry); return d.v; }
+      if (d) { entry.t = d.t; if (Date.now() - d.t > ttl && !entry.queued) { entry.queued = true; scheduleRefresh(key, () => refresh(entry)); } return d.v; }
     }
     const v = await fn();
     if (disk) idb.set(dkey(), { t: Date.now(), v });
@@ -878,9 +878,37 @@ function holdConn(a, holdMs = 4000) {
   if (!a) return () => {};
   const k = accId(a); accOpen.set(k, (accOpen.get(k) || 0) + 1);
   let done = false;
-  return () => { if (done) return; done = true; setTimeout(() => { accOpen.set(k, Math.max(0, (accOpen.get(k) || 1) - 1)); fullUntil = 0; }, holdMs); };
+  const free = () => { accOpen.set(k, Math.max(0, (accOpen.get(k) || 1) - 1)); recentOwn.set(k, [...(recentOwn.get(k) || []).filter(t => Date.now() - t < 6 * 60e3), Date.now()]); fullUntil = 0; };
+  // holdMs 0 = meteen vrij (zelfde apparaat start iets anders: dan direct hetzelfde account weer gebruiken)
+  return () => { if (done) return; done = true; if (holdMs > 0) setTimeout(free, holdMs); else free(); };
 }
 const ownOpen = a => accOpen.get(accId(a)) || 0;
+// Net zelf gestopt? De aanbieder telt die verbinding soms nog minuten mee. Voor dit apparaat is dat scherm gewoon vrij:
+// een nieuwe stream op hetzelfde account vervangt de oude (de aanbieder gooit de oudste eruit). Dus nooit "vol" door jezelf.
+const recentOwn = new Map();
+const ownLinger = a => (recentOwn.get(accId(a)) || []).filter(t => Date.now() - t < 6 * 60e3).length;
+// ---- Lijsten verversen op een rustig moment ----
+// Bij het opstarten meteen (automatisch), maar niet terwijl er gekeken wordt. Eén ding tegelijk, en alles gaat
+// daarna ook nog door de rem (dus geen blokkade). De gids (epg) altijd meteen.
+const refreshQ = new Map();
+let refreshTimer = null;
+const APP_START = Date.now();
+function quietNow() {
+  if (Date.now() - APP_START < 3000) return false; // bij het opstarten: meteen (alles gaat door de rem)
+  for (const v of accOpen.values()) if (v > 0) return false;
+  return true;
+}
+function scheduleRefresh(key, fn) {
+  if (/^epg:/.test(key)) return fn();
+  refreshQ.set(key, fn);
+  if (refreshTimer) return;
+  refreshTimer = setInterval(() => {
+    if (!refreshQ.size) { clearInterval(refreshTimer); refreshTimer = null; return; }
+    if (!quietNow()) return;
+    const [k, f] = refreshQ.entries().next().value;
+    refreshQ.delete(k); f();
+  }, 4000);
+}
 // ---- Is de aanbieder bereikbaar? (voor de meter in Instellingen) ----
 // Alleen afgeleid van wat de app toch al vraagt. Geen antwoord/verbinding geweigerd = waarschijnlijk geblokkeerd.
 const health = { okAt: 0, failAt: 0, since: 0 };
@@ -959,7 +987,7 @@ async function pickAccount(avoid) {
     if (ownOpen(a) >= knownMax(a)) continue; // zelf vol: niet vragen
     const u = await accInfo(a);
     if (order.length > 1 && !accValid(u)) continue;
-    const max = Number(u?.max_connections) || 1, used = Math.max(Number(u?.active_cons) || 0, ownOpen(a));
+    const max = Number(u?.max_connections) || 1, used = Math.max(Math.max(0, (Number(u?.active_cons) || 0) - ownLinger(a)), ownOpen(a));
     if (used < max) return { a, full: false };
   }
   if (!avoid) fullUntil = Date.now() + 90000;
@@ -1339,15 +1367,16 @@ async function pickURL(p, vod, avoid) {
   if (!urlHold.has(r.url)) urlHold.set(r.url, holdConn(r.acc, 0));
   return r.url;
 }
-function releaseURL(url, ms) { const h = urlHold.get(url); if (!h) return; urlHold.delete(url); setTimeout(h, ms == null ? 4000 : ms); }
+function releaseURL(url, ms) { const h = urlHold.get(url); if (!h) return; urlHold.delete(url); if (ms === 0) h(); else setTimeout(h, ms == null ? 1000 : ms); }
 window.TVBackend = {
   direct: () => cfg ? { base: accBase(catalogAcc()), creds: accCreds(catalogAcc()) } : null,
   pick: (p, vod) => pickURL(p, vod),
   // Speler gestopt: dit scherm komt vrij zodra de aanbieder het loslaat (live ~4 s, film ~5 min)
-  release: (url, vod) => releaseURL(url, vod ? 5 * 60e3 : 4000),
+  // now = meteen vrij (zappen: de nieuwe zender mag direct op hetzelfde account)
+  release: (url, vod) => releaseURL(url, vod === 'now' ? 0 : vod ? 20000 : 1000),
   // Kreeg dit adres geen beeld? Als het account vol zat: één keer het andere account, alleen als dat vrij is
   failed: async (url, p, vod) => {
-    const a = urlAcc.get(url); releaseURL(url, vod ? 5 * 60e3 : 4000);
+    const a = urlAcc.get(url); releaseURL(url, vod ? 20000 : 1000);
     if (!a || accList().length < 2) return null;
     const u = await accInfo(a, 0);
     if (u && accValid(u) && (Number(u.active_cons) || 0) < (Number(u.max_connections) || 1)) return null;

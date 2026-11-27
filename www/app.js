@@ -491,7 +491,7 @@ function rowEl(title, { count, onAll } = {}) {
   const el = document.createElement('section');
   el.className = 'row';
   // Kopje links, rechts een nette knop "Alles" (zoals Netflix/Apple TV) in plaats van een pijltje vlak achter de tekst
-  el.innerHTML = `<div class="row-head"><div class="row-title"><h3>${esc(title)}</h3></div>${count ? `<span class="count">${count}</span>` : ''}${onAll ? `<button class="see-all">Alles${CHEVRON}</button>` : ''}</div>
+  el.innerHTML = `<div class="row-head"><div class="row-title"><h3>${esc(title)}</h3></div>${count ? `<span class="count">${count}</span>` : ''}${onAll ? `<button class="see-all">Bekijk meer${CHEVRON}</button>` : ''}</div>
     <div class="row-wrap"><button class="row-arrow l" aria-label="Terug"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><div class="shelf" data-ctx></div><button class="row-arrow r" aria-label="Verder"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button></div>`;
   const shelf = $('.shelf', el);
   $('.row-arrow.l', el).onclick = () => shelf.scrollBy({ left: -shelf.clientWidth * .85, behavior: 'smooth' });
@@ -878,7 +878,7 @@ function renderMine() {
     const l = list.filter(f => f.type === t);
     if (!l.length) continue;
     const max = TUNE.search[t === 'live' ? 0 : 1] * (TOUCH ? 1 : 2);
-    body.insertAdjacentHTML('beforeend', `<div class="row-head mine-head"><div class="row-title"><h3>${label}</h3></div>${l.length > max ? `<button class="see-all" data-all="${t}">Alles (${l.length})${CHEVRON}</button>` : ''}</div><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx>${l.slice(0, max).map(x => cardHTML(t, x, opt(x))).join('')}</div>`);
+    body.insertAdjacentHTML('beforeend', `<div class="row-head mine-head"><div class="row-title"><h3>${label}</h3></div>${l.length > max ? `<button class="see-all" data-all="${t}">Bekijk meer${CHEVRON}</button>` : ''}</div><div class="grid ${t === 'live' ? 'live' : 'posters'}" data-ctx>${l.slice(0, max).map(x => cardHTML(t, x, opt(x))).join('')}</div>`);
     const g = $$('.grid[data-ctx]', body).pop(); g._list = l; g._type = t;
     const all = $(`[data-all="${t}"]`, body);
     if (all) all.onclick = () => {

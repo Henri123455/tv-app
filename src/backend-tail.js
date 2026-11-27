@@ -277,15 +277,16 @@ async function pickURL(p, vod, avoid) {
   if (!urlHold.has(r.url)) urlHold.set(r.url, holdConn(r.acc, 0));
   return r.url;
 }
-function releaseURL(url, ms) { const h = urlHold.get(url); if (!h) return; urlHold.delete(url); setTimeout(h, ms == null ? 4000 : ms); }
+function releaseURL(url, ms) { const h = urlHold.get(url); if (!h) return; urlHold.delete(url); if (ms === 0) h(); else setTimeout(h, ms == null ? 1000 : ms); }
 window.TVBackend = {
   direct: () => cfg ? { base: accBase(catalogAcc()), creds: accCreds(catalogAcc()) } : null,
   pick: (p, vod) => pickURL(p, vod),
   // Speler gestopt: dit scherm komt vrij zodra de aanbieder het loslaat (live ~4 s, film ~5 min)
-  release: (url, vod) => releaseURL(url, vod ? 5 * 60e3 : 4000),
+  // now = meteen vrij (zappen: de nieuwe zender mag direct op hetzelfde account)
+  release: (url, vod) => releaseURL(url, vod === 'now' ? 0 : vod ? 20000 : 1000),
   // Kreeg dit adres geen beeld? Als het account vol zat: één keer het andere account, alleen als dat vrij is
   failed: async (url, p, vod) => {
-    const a = urlAcc.get(url); releaseURL(url, vod ? 5 * 60e3 : 4000);
+    const a = urlAcc.get(url); releaseURL(url, vod ? 20000 : 1000);
     if (!a || accList().length < 2) return null;
     const u = await accInfo(a, 0);
     if (u && accValid(u) && (Number(u.active_cons) || 0) < (Number(u.max_connections) || 1)) return null;
